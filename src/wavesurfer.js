@@ -15,16 +15,21 @@ var WaveSurfer = {
         autoCenter    : true,
         backend       : 'WebAudio',
         barHeight     : 1,
+        classList     : {},
+        styleList     : {cursor: {}},
         closeAudioContext: false,
         container     : null,
+        cursorAlignment: 'middle',
         cursorColor   : '#333',
         cursorWidth   : 1,
         dragSelection : true,
+        fillColor     : undefined,
         fillParent    : true,
         forceDecode   : false,
         height        : 128,
         hideScrollbar : false,
         interact      : true,
+        invertTransparency: false,
         loopSelection : true,
         mediaContainer: null,
         mediaControls : false,
@@ -42,10 +47,33 @@ var WaveSurfer = {
     },
 
     init: function (params) {
-        // Extract relevant parameters (or defaults)
-        this.params = WaveSurfer.util.extend({}, this.defaultParams, params);
+        var my = this;
 
-        this.container = 'string' == typeof params.container ?
+        // Get defaults.
+        var temp = Object.assign ({}, this.defaultParams);
+
+        // Set aliases.
+        this.aliases = {};
+        this.aliases.cursorColor = {
+            target: {object: temp.styleList.cursor, property: '_backgroundColor'},
+            sourceList: [
+                {object: temp, property: 'cursorColor'},
+                {object: temp.styleList.cursor, property: 'backgroundColor'}
+            ]
+        };
+        this.aliases.cursorWidth = {
+            target: {object: temp.styleList.cursor, property: '_width'},
+            sourceList: [
+                {object: temp, property: 'cursorWidth', get: function (n) { return parseFloat(n); }, set: function (n) { return n + 'px'; }},
+                {object: temp.styleList.cursor, property: 'width'}
+            ]
+        };
+        WaveSurfer.util.refreshAliases (this.aliases);
+
+        // Merge defaults and init parameters.
+        this.params = WaveSurfer.util.deepMerge(temp, params);
+
+        this.container = (typeof params.container == 'string') ?
             document.querySelector(this.params.container) :
             this.params.container;
 
@@ -84,13 +112,16 @@ var WaveSurfer = {
         this.createPeakCache();
 
         this.isDestroyed = false;
+        my.on ('ready', function () {
+            my.audioIsReady = true;
+            if (my.progress !== undefined) { my.seekTo(my.progress); }
+        });
     },
 
     createDrawer: function () {
         var my = this;
-
         this.drawer = Object.create(WaveSurfer.Drawer[this.params.renderer]);
-        this.drawer.init(this.container, this.params);
+        this.drawer.init(this.container, this.params, this.aliases);
 
         this.drawer.on('redraw', function () {
             my.drawBuffer();
@@ -153,17 +184,31 @@ var WaveSurfer = {
         return this.backend.getDuration();
     },
 
+    getCurrentTime: function () {
+        return this.backend.getCurrentTime();
+    },
+
     play: function (start, end) {
-        this.fireEvent('interaction', this.play.bind(this, start, end));
-        this.backend.play(start, end);
+        var my = this;
+        if (my.audioIsReady == true) {
+            action();
+            return true;
+        } else {
+            this.tmpEvents.push(this.once('ready', action));
+            return false;
+        }
+        function action () {
+            my.fireEvent('interaction', my.play.bind(my, start, end));
+            my.backend.play(start, end)
+        }
     },
 
     pause: function () {
-        this.backend.isPaused() || this.backend.pause();
+        return this.backend.isPaused() || this.backend.pause();
     },
 
     playPause: function () {
-        this.backend.isPaused() ? this.play() : this.pause();
+        return this.backend.isPaused() ? this.play() : this.pause();
     },
 
     isPlaying: function () {
@@ -191,6 +236,8 @@ var WaveSurfer = {
     },
 
     seekTo: function (progress) {
+        this.progress = progress
+
         this.fireEvent('interaction', this.seekTo.bind(this, progress));
 
         var paused = this.backend.isPaused();
@@ -202,7 +249,7 @@ var WaveSurfer = {
         var oldScrollParent = this.params.scrollParent;
         this.params.scrollParent = false;
         this.backend.seekTo(progress * this.getDuration());
-        this.drawer.progress(this.backend.getPlayedPercents());
+        this.drawer.progress(progress);
 
         if (!paused) {
             this.backend.play();
@@ -232,26 +279,6 @@ var WaveSurfer = {
      */
     getVolume: function () {
         return this.backend.getVolume();
-    },
-
-    /**
-     * Get the current play time.
-     */
-    getCurrentTime: function () {
-        return this.backend.getCurrentTime();
-    },
-
-    /**
-     * Set the current play time in seconds.
-     *
-     * @param {Number} seconds A positive number in seconds. E.g. 10 means 10 seconds, 60 means 1 minute
-     */
-    setCurrentTime: function (seconds) {
-        if(this.getDuration() >= seconds) {
-            this.seekTo(1);
-        } else {
-            this.seekTo(seconds/this.getDuration());
-        }
     },
 
     /**
@@ -326,21 +353,26 @@ var WaveSurfer = {
         this.params.interact = !this.params.interact;
     },
 
-    drawBuffer: function () {
-        var nominalWidth = Math.round(
-            this.getDuration() * this.params.minPxPerSec * this.params.pixelRatio
-        );
+    getComputedWidthAndRange: function () {
+        var nominalWidth = Math.round(this.getDuration() * this.params.minPxPerSec * this.params.pixelRatio);
         var parentWidth = this.drawer.getWidth();
-        var width = nominalWidth;
-        var start = this.drawer.getScrollX();
-        var end = Math.min(start + parentWidth, width);
 
-        // Fill container
+        // Fill container.
         if (this.params.fillParent && (!this.params.scrollParent || nominalWidth < parentWidth)) {
-            width = parentWidth;
-            start = 0;
-            end = width;
+            var width = parentWidth;
+            var start = 0;
+            var end = width;
+        } else {
+            var width = nominalWidth;
+            var start = this.drawer.getScrollX();
+            var end = Math.min(start + parentWidth, width);
         }
+        return { width: width, start: start, end: end };
+    },
+
+    drawBuffer: function () {
+        var wse = this.getComputedWidthAndRange();
+        var width = wse.width, start = wse.start, end = wse.end;
 
         if (this.params.partialRender) {
             var newRanges = this.peakCache.addRangeToPeakCache(width, start, end);
@@ -349,9 +381,17 @@ var WaveSurfer = {
               this.drawer.drawPeaks(peaks, width, newRanges[i][0], newRanges[i][1]);
             }
         } else {
+            if (!('peaks' in this.backend)) {
+                var subrangeLength = width;
+            } else {
+                var numberOfChannels = this.backend.buffer ? this.backend.buffer.numberOfChannels :
+                    this.backend.preload ? this.backend.preload.numberOfChannels :
+                    (this.backend.peaks[0] instanceof Array) ? this.backend.peaks.length : 2;
+                var subrangeLength = ((this.backend.peaks[0] instanceof Array) ? this.backend.peaks[0].length : this.backend.peaks.length) / numberOfChannels;
+            }
             start = 0;
-            end = width;
-            var peaks = this.backend.getPeaks(width, start, end);
+            end = subrangeLength - 1;
+            var peaks = this.backend.getPeaks(subrangeLength, start, end);
             this.drawer.drawPeaks(peaks, width, start, end);
         }
         this.fireEvent('redraw', peaks, width);
@@ -416,12 +456,12 @@ var WaveSurfer = {
     /**
      * Loads audio and re-renders the waveform.
      */
-    load: function (url, peaks, preload) {
-        this.empty();
+    load: function (url, peaks, preload, loadOnInteraction) {
+        this.empty({drawPeaks: peaks === undefined});
         this.isMuted = false;
 
         switch (this.params.backend) {
-            case 'WebAudio': return this.loadBuffer(url, peaks);
+            case 'WebAudio': return this.loadBuffer(url, peaks, true, loadOnInteraction);
             case 'MediaElement': return this.loadMediaElement(url, peaks, preload);
         }
     },
@@ -429,7 +469,7 @@ var WaveSurfer = {
     /**
      * Loads audio using Web Audio buffer backend.
      */
-    loadBuffer: function (url, peaks) {
+    loadBuffer: function (url, peaks, preload, loadOnInteraction) {
         var load = (function (action) {
             if (action) {
                 this.tmpEvents.push(this.once('ready', action));
@@ -440,7 +480,9 @@ var WaveSurfer = {
         if (peaks) {
             this.backend.setPeaks(peaks);
             this.drawBuffer();
-            this.tmpEvents.push(this.once('interaction', load));
+        }
+        if (loadOnInteraction) {
+            this.tmpEvents.push(this.once('interaction', function (result) { load(result); }));
         } else {
             return load();
         }
@@ -554,11 +596,11 @@ var WaveSurfer = {
     /**
      * Exports PCM data into a JSON array and opens in a new window.
      */
-    exportPCM: function (length, accuracy, noWindow) {
+    exportPCM: function (length, accuracy, noWindow, start) {
         length = length || 1024;
         accuracy = accuracy || 10000;
         noWindow = noWindow || false;
-        var peaks = this.backend.getPeaks(length, accuracy);
+        var peaks = this.backend.getPeaks(length, start, length - 1);
         var arr = [].map.call(peaks, function (val) {
             return Math.round(val * accuracy) / accuracy;
         });
@@ -601,7 +643,8 @@ var WaveSurfer = {
     /**
      * Display empty waveform.
      */
-    empty: function () {
+    empty: function (init) {
+        init = init || {};
         if (!this.backend.isPaused()) {
             this.stop();
             this.backend.disconnectSource();
@@ -610,7 +653,7 @@ var WaveSurfer = {
         this.clearTmpEvents();
         this.drawer.progress(0);
         this.drawer.setWidth(0);
-        this.drawer.drawPeaks({ length: this.drawer.getWidth() }, 0);
+        if (!('drawPeaks' in init) || (init.drawPeaks == true)) { this.drawer.drawPeaks({ length: this.drawer.getWidth() }, 0); }
     },
 
     /**
