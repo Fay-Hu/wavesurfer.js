@@ -1,9 +1,10 @@
 'use strict';
 
 WaveSurfer.Drawer = {
-    init: function (container, params) {
+    init: function (container, params, aliases) {
         this.container = container;
         this.params = params;
+        this.aliases = aliases;
 
         this.width = 0;
         this.height = params.height * this.params.pixelRatio;
@@ -48,18 +49,17 @@ WaveSurfer.Drawer = {
         var nominalWidth = this.width;
         var parentWidth = this.getWidth();
 
-        var progress;
-
         if (!this.params.fillParent && nominalWidth < parentWidth) {
-            progress = ((clientX - bbox.left) * this.params.pixelRatio / nominalWidth) || 0;
-
-            if (progress > 1) {
-                progress = 1;
-            }
+            var numerator = (clientX - bbox.left) * this.params.pixelRatio;
+            var denominator = nominalWidth - 1;
         } else {
-            progress = ((clientX - bbox.left + this.wrapper.scrollLeft) / this.wrapper.scrollWidth) || 0;
+            var numerator = (clientX - bbox.left + this.wrapper.scrollLeft);
+            var denominator = this.wrapper.scrollWidth - 1;
         }
-
+        // The clicked pixel is never equal the width. It's always 1 pixel less.
+        // A 100-pixel element can be clicked at position 0 through position 99. And the range must include 0 as well as 1.
+        // Thus, clicking at the 100th pixel (99) means progress is 1, not 99/100 or .99.
+        var progress = (numerator > denominator) ? 1 : (numerator / denominator || 0);
         return progress;
     },
 
@@ -87,13 +87,29 @@ WaveSurfer.Drawer = {
         });
     },
 
-    drawPeaks: function (peaks, length, start, end) {
-        this.setWidth(length);
+    drawPeaks: WaveSurfer.util.frame(function (peaks, length, start, end) {
+        var my = this;
 
-        this.params.barWidth ?
-            this.drawBars(peaks, 0, start, end) :
-            this.drawWave(peaks, 0, start, end);
-    },
+        my.setWidth(length);
+
+        // Clear the canvas.
+        my.clearCanvas();
+
+        // Run the draw function if there are no channels to split. Otherwise, split the channels.
+        if (!my.params.splitChannels) {
+            drawFunction(peaks, 0);
+        } else {
+            var channels = peaks;
+            my.setHeight(channels.length * my.params.height * my.params.pixelRatio);
+            channels.forEach(function(channelPeaks, channelIndex) {drawFunction(peaks, channelIndex); });
+        }
+
+        function drawFunction (peaks, channelIndex) {
+            // Extract peaks if they are in an array.
+            if (peaks[0] instanceof Array) { peaks = peaks[0]; }
+            my[my.params.barWidth ? "drawBars" : "drawWave"](peaks, channelIndex, start, end);
+        }
+    }),
 
     style: function (el, styles) {
         Object.keys(styles).forEach(function (prop) {
@@ -153,9 +169,7 @@ WaveSurfer.Drawer = {
     },
 
     setWidth: function (width) {
-        if (this.width == width) {
-          return;
-        }
+        if (this.width == width) { return; }
 
         this.width = width;
 
@@ -183,8 +197,7 @@ WaveSurfer.Drawer = {
 
     progress: function (progress) {
         var minPxDelta = 1 / this.params.pixelRatio;
-        var pos = Math.round(progress * this.width) * minPxDelta;
-
+        var pos = Math.ceil(progress * this.width) * minPxDelta;
         if (pos < this.lastPos || pos - this.lastPos >= minPxDelta) {
             this.lastPos = pos;
 
@@ -200,7 +213,7 @@ WaveSurfer.Drawer = {
     destroy: function () {
         this.unAll();
         if (this.wrapper) {
-            this.container.removeChild(this.wrapper);
+            if (this.wrapper.parentNode == this.container) this.container.removeChild(this.wrapper);
             this.wrapper = null;
         }
     },
@@ -214,7 +227,7 @@ WaveSurfer.Drawer = {
 
     drawWave: function (peaks, max) {},
 
-    clearWave: function () {},
+    clearCanvas: function () {},
 
     updateProgress: function (position) {}
 };
