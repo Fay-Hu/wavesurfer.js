@@ -4,7 +4,7 @@ WaveSurfer.Drawer.Canvas = Object.create(WaveSurfer.Drawer.MultiCanvas);
 
 WaveSurfer.util.extend(WaveSurfer.Drawer.Canvas, {
     initDrawer: function (params) {
-        this.maxCanvasWidth = this.width = this.getWidth();
+        this.maxCanvasWidth = params.maxCanvasWidth != null ? params.maxCanvasWidth : 4000;
         this.maxCanvasElementWidth = Math.round(this.maxCanvasWidth / this.params.pixelRatio);
 
         if (this.maxCanvasWidth <= 1) {
@@ -19,6 +19,8 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.Canvas, {
     },
 
     updateSize: function () {
+        this.maxCanvasWidth = this.width = this.getWidth();
+        this.maxCanvasElementWidth = Math.floor(this.maxCanvasWidth / this.params.pixelRatio);
         var requiredCanvases = 1;
         while (this.canvases.length < requiredCanvases) { this.addCanvas(); }
         while (this.canvases.length > requiredCanvases) { this.removeCanvas(); }
