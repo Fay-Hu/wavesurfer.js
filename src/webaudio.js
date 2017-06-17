@@ -216,52 +216,30 @@ WaveSurfer.WebAudio = {
      * of peaks consisting of (max, min) values for each subrange.
      */
     getPeaks: function (length, first, last) {
-        if (this.peaks) { return this.peaks; }
-
         first = first || 0;
         last = last || length - 1;
-
+        if (this.peaks) { return this.peaks; }
         this.setLength(length);
-
         var sampleSize = this.buffer.length / length;
         var sampleStep = ~~(sampleSize / 10) || 1;
         var channels = this.buffer.numberOfChannels;
-
         for (var c = 0; c < channels; c++) {
             var peaks = this.splitPeaks[c];
             var chan = this.buffer.getChannelData(c);
-
             for (var i = first; i <= last; i++) {
                 var start = ~~(i * sampleSize);
                 var end = ~~(start + sampleSize);
-                var min = 0;
-                var max = 0;
-
+                var min = 0, max = 0;
                 for (var j = start; j < end; j += sampleStep) {
                     var value = chan[j];
-
-                    if (value > max) {
-                        max = value;
-                    }
-
-                    if (value < min) {
-                        min = value;
-                    }
+                    if (max < value) { max = value; } else if (min > value) { min = value; }
                 }
-
                 peaks[2 * i] = max;
                 peaks[2 * i + 1] = min;
-
-                if (c == 0 || max > this.mergedPeaks[2 * i]) {
-                    this.mergedPeaks[2 * i] = max;
-                }
-
-                if (c == 0 || min < this.mergedPeaks[2 * i + 1]) {
-                    this.mergedPeaks[2 * i + 1] = min;
-                }
+                if (c == 0 || max > this.mergedPeaks[2 * i]) { this.mergedPeaks[2 * i] = max; }
+                if (c == 0 || min < this.mergedPeaks[2 * i + 1]) { this.mergedPeaks[2 * i + 1] = min; }
             }
         }
-
         return this.params.splitChannels ? this.splitPeaks : this.mergedPeaks;
     },
 
@@ -379,7 +357,6 @@ WaveSurfer.WebAudio = {
 
         // need to re-create source on each playback
         this.createSource();
-
         var adjustedTime = this.seekTo(start, end);
 
         start = adjustedTime.start;
