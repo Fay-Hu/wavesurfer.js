@@ -4,7 +4,14 @@ WaveSurfer.Drawer.Canvas = Object.create(WaveSurfer.Drawer.MultiCanvas);
 
 WaveSurfer.util.extend(WaveSurfer.Drawer.Canvas, {
     initDrawer: function (params) {
-        this.maxCanvasElementWidth = Math.round(this.width / this.params.pixelRatio);
+        this.maxCanvasWidth = this.width = this.getWidth();
+        this.maxCanvasElementWidth = Math.round(this.maxCanvasWidth / this.params.pixelRatio);
+
+        if (this.maxCanvasWidth <= 1) {
+            throw 'maxCanvasWidth must be greater than 1.';
+        } else if (this.maxCanvasWidth % 2 == 1) {
+            throw 'maxCanvasWidth must be an even number.';
+        }
 
         this.hasProgressCanvas = this.params.waveColor != this.params.progressColor;
         this.halfPixel = 0.5 / this.params.pixelRatio;
@@ -12,9 +19,7 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.Canvas, {
     },
 
     updateSize: function () {
-        var totalWidth = Math.round(this.width / this.params.pixelRatio);
-        var requiredCanvases = Math.ceil(totalWidth / this.maxCanvasElementWidth);
-
+        var requiredCanvases = 1;
         while (this.canvases.length < requiredCanvases) { this.addCanvas(); }
         while (this.canvases.length > requiredCanvases) { this.removeCanvas(); }
 
