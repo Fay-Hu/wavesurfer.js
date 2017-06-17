@@ -94,8 +94,7 @@ WaveSurfer.util.extend(WaveSurfer.MediaElement, {
      */
     _load: function (media, peaks) {
         var my = this;
-
-        // load must be called manually on iOS, otherwise peaks won't draw
+        // load must be called manually on iOS; otherwise, peaks won't draw
         // until a user interaction triggers load --> 'ready' event
         if (typeof media.load == 'function') {
             media.load();
