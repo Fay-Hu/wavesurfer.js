@@ -26,7 +26,6 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.Canvas, {
         while (this.canvases.length > requiredCanvases) { this.removeCanvas(); }
 
         this.canvases.forEach (function (canvas, i) {
-            // Add some overlap to prevent vertical white stripes; keep the width even for simplicity.
             this.updateDimensions(canvas, this.width, this.height);
             this.clearWaveType(canvas);
         }, this);
