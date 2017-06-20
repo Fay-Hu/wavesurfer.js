@@ -1,3 +1,8 @@
+/*! wavesurfer.js 1.4.0A (Monday, 19 Jun 2017)
+* https://github.com/katspaugh/wavesurfer.js
+* @license BSD-3-Clause
+*/
+
 'use strict';
 
 var WaveSurfer = {
