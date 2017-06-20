@@ -75,7 +75,6 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.SplitWavePointPlot, {
      */
     initDrawer: function (params) {
         var my = this;
-
         //set defaults if not passed in
         for(var paramName in this.defaultPlotParams) {
             if(this.params[paramName] === undefined) {
@@ -119,7 +118,6 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.SplitWavePointPlot, {
     drawPeaks: function (peaks, length, start, end) {
         //make sure that the plot array is already loaded
         if (this.plotArrayLoaded == true) {
-
             this.setWidth(length);
 
             //fake that we are splitting channels
