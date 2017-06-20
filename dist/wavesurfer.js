@@ -468,13 +468,14 @@ var WaveSurfer = {
      * Loads audio and re-renders the waveform.
      */
     load: function (url, peaks, preload, loadOnInteraction) {
-        this.empty({drawPeaks: peaks === undefined});
-        this.isMuted = false;
-
-        switch (this.params.backend) {
-            case 'WebAudio': return this.loadBuffer(url, peaks, true, loadOnInteraction);
-            case 'MediaElement': return this.loadMediaElement(url, peaks, preload);
-        }
+        var my = this;
+        my.empty({drawPeaks: peaks === undefined}, function () {
+            my.isMuted = false;
+            switch (my.params.backend) {
+                case 'WebAudio': return my.loadBuffer(url, peaks, true, loadOnInteraction);
+                case 'MediaElement': return my.loadMediaElement(url, peaks, preload);
+            }
+        });
     },
 
     /**
@@ -660,7 +661,7 @@ var WaveSurfer = {
     /**
      * Display empty waveform.
      */
-    empty: function (init) {
+    empty: function (init, callback) {
         init = init || {};
         if (!this.backend.isPaused()) {
             this.stop();
@@ -670,7 +671,11 @@ var WaveSurfer = {
         this.clearTmpEvents();
         this.drawer.progress(0);
         this.drawer.setWidth(0);
-        if (!('drawPeaks' in init) || (init.drawPeaks == true)) { this.drawer.drawPeaks({ length: this.drawer.getWidth() }, 0); }
+        if (!('drawPeaks' in init) || (init.drawPeaks == true)) {
+            this.drawer.drawPeaks({ length: this.drawer.getWidth() }, 0, undefined, undefined, callback);
+        } else {
+            callback();
+        }
     },
 
     /**
