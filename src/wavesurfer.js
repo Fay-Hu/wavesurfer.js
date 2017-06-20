@@ -1,11 +1,3 @@
-/**
- * wavesurfer.js
- *
- * https://github.com/katspaugh/wavesurfer.js
- *
- * This work is licensed under a BSD-3-Clause License.
- */
-
 'use strict';
 
 var WaveSurfer = {
@@ -114,42 +106,38 @@ var WaveSurfer = {
         this.isDestroyed = false;
         my.on ('ready', function () {
             my.audioIsReady = true;
-            if (my.progress !== undefined) { my.seekTo(my.progress); }
+            if (my.backend.lastClickPosition !== undefined) { my.seekTo(my.backend.lastClickPosition); }
         });
     },
 
     createDrawer: function () {
         var my = this;
-        this.drawer = Object.create(WaveSurfer.Drawer[this.params.renderer]);
-        this.drawer.init(this.container, this.params, this.aliases);
+        my.drawer = Object.create(WaveSurfer.Drawer[my.params.renderer]);
+        my.drawer.init(my.container, my.params, my.aliases);
 
-        this.drawer.on('redraw', function () {
-            my.drawBuffer();
-            my.drawer.progress(my.backend.getPlayedPercents());
+        my.drawer.on('redraw', function () {
+            my.drawBuffer(function () { my.drawer.progress(my.backend.getPlayedPercents()); });
         });
 
         // Click-to-seek
-        this.drawer.on('click', function (e, progress) {
-            setTimeout(function () {
-                my.seekTo(progress);
-            }, 0);
+        my.drawer.on('click', function (e, progress) {
+            setTimeout(function () { my.seekTo(progress); }, 0);
         });
 
         // Relay the scroll event from the drawer
-        this.drawer.on('scroll', function (e) {
+        my.drawer.on('scroll', function (e) {
             if (my.params.partialRender) {
-                my.drawBuffer();
+                my.drawBuffer(function () {my.fireEvent('scroll', e); });
+            } else {
+                my.fireEvent('scroll', e);
             }
-            my.fireEvent('scroll', e);
         });
     },
 
     createBackend: function () {
         var my = this;
 
-        if (this.backend) {
-            this.backend.destroy();
-        }
+        if (this.backend) { this.backend.destroy(); }
 
         // Back compat
         if (this.params.backend == 'AudioElement') {
@@ -236,8 +224,7 @@ var WaveSurfer = {
     },
 
     seekTo: function (progress) {
-        this.progress = progress
-
+        this.lastClickPosition = progress;
         this.fireEvent('interaction', this.seekTo.bind(this, progress));
 
         var paused = this.backend.isPaused();
@@ -245,15 +232,13 @@ var WaveSurfer = {
         if (!paused) {
             this.backend.pause();
         }
-        // avoid small scrolls while paused seeking
+        // avoid small scrolls while seeking is paused.
         var oldScrollParent = this.params.scrollParent;
         this.params.scrollParent = false;
         this.backend.seekTo(progress * this.getDuration());
         this.drawer.progress(progress);
 
-        if (!paused) {
-            this.backend.play();
-        }
+        if (!paused) { this.backend.play(); }
         this.params.scrollParent = oldScrollParent;
         this.fireEvent('seek', progress);
     },
@@ -353,6 +338,12 @@ var WaveSurfer = {
         this.params.interact = !this.params.interact;
     },
 
+    getNumberOfChannels: function () {
+      return this.backend.buffer ? this.backend.buffer.numberOfChannels :
+             this.backend.preload ? this.backend.preload.numberOfChannels :
+            (this.backend.peaks[0] instanceof Array) ? this.backend.peaks.length : 2;
+    },
+
     getComputedWidthAndRange: function () {
         var nominalWidth = Math.round(this.getDuration() * this.params.minPxPerSec * this.params.pixelRatio);
         var parentWidth = this.drawer.getWidth();
@@ -370,45 +361,44 @@ var WaveSurfer = {
         return { width: width, start: start, end: end };
     },
 
-    drawBuffer: function () {
+    drawBuffer: function (callback) {
         var wse = this.getComputedWidthAndRange();
         var width = wse.width, start = wse.start, end = wse.end;
-
-        if (this.params.partialRender) {
-            var newRanges = this.peakCache.addRangeToPeakCache(width, start, end);
-            for (var i = 0; i < newRanges.length; i++) {
-              var peaks = this.backend.getPeaks(width, newRanges[i][0], newRanges[i][1]);
-              this.drawer.drawPeaks(peaks, width, newRanges[i][0], newRanges[i][1]);
+        var my = this;
+        if (my.params.partialRender) {
+            var newRanges = my.peakCache.addRangeToPeakCache(width, start, end);
+            var peaks = function (inner) {
+                for (var i = 0; i < newRanges.length; i++) {
+                    var peaks = my.backend.getPeaks(width, newRanges[i][0], newRanges[i][1]);
+                    inner(peaks, width, newRanges[i][0], newRanges[i][1]);
+                }
             }
         } else {
-            if (!('peaks' in this.backend)) {
+            if (!('peaks' in my.backend)) {
                 var subrangeLength = width;
             } else {
-                var numberOfChannels = this.backend.buffer ? this.backend.buffer.numberOfChannels :
-                    this.backend.preload ? this.backend.preload.numberOfChannels :
-                    (this.backend.peaks[0] instanceof Array) ? this.backend.peaks.length : 2;
-                var subrangeLength = ((this.backend.peaks[0] instanceof Array) ? this.backend.peaks[0].length : this.backend.peaks.length) / numberOfChannels;
+                var numberOfChannels = my.getNumberOfChannels();
+                var subrangeLength = ((my.backend.peaks[0] instanceof Array) ? my.backend.peaks[0].length : my.backend.peaks.length) / numberOfChannels;
             }
             start = 0;
             end = subrangeLength - 1;
-            var peaks = this.backend.getPeaks(subrangeLength, start, end);
-            this.drawer.drawPeaks(peaks, width, start, end);
+            var peaks = my.backend.getPeaks(subrangeLength, start, end);
         }
-        this.fireEvent('redraw', peaks, width);
+        my.drawer.drawPeaks(peaks, width, start, end, function () { callback(); my.fireEvent('redraw', peaks, width);  });
     },
 
     zoom: function (pxPerSec) {
         this.params.minPxPerSec = pxPerSec;
-
         this.params.scrollParent = true;
-
-        this.drawBuffer();
-        this.drawer.progress(this.backend.getPlayedPercents());
-
-        this.drawer.recenter(
-            this.getCurrentTime() / this.getDuration()
-        );
-        this.fireEvent('zoom', pxPerSec);
+        var my = this;
+        this.drawBuffer(function () {
+            var drawer = my.drawer
+            var progress = my.backend.getPlayedPercents();
+            if (progress === 0 && my.lastClickPosition != 0) progress = my.lastClickPosition;
+            drawer.updateProgress(drawer.width / my.params.pixelRatio * progress);
+            my.drawer.recenter(progress);
+            my.fireEvent('zoom', pxPerSec);
+        })
     },
 
     /**
@@ -426,9 +416,9 @@ var WaveSurfer = {
      * Directly load an externally decoded AudioBuffer.
      */
     loadDecodedBuffer: function (buffer) {
-        this.backend.load(buffer);
-        this.drawBuffer();
-        this.fireEvent('ready');
+        var my = this;
+        my.backend.load(buffer);
+        my.drawBuffer(function () { my.fireEvent('ready'); })
     },
 
     /**
@@ -470,21 +460,28 @@ var WaveSurfer = {
      * Loads audio using Web Audio buffer backend.
      */
     loadBuffer: function (url, peaks, preload, loadOnInteraction) {
-        var load = (function (action) {
+        var my = this;
+        var load = function (action) {
             if (action) {
-                this.tmpEvents.push(this.once('ready', action));
+                my.tmpEvents.push(my.once('ready', action));
             }
-            return this.getArrayBuffer(url, this.loadArrayBuffer.bind(this));
-        }).bind(this);
+            return my.getArrayBuffer(url, my.loadArrayBuffer.bind(my));
+        };
 
         if (peaks) {
-            this.backend.setPeaks(peaks);
-            this.drawBuffer();
-        }
-        if (loadOnInteraction) {
-            this.tmpEvents.push(this.once('interaction', function (result) { load(result); }));
+            my.backend.setPeaks(peaks);
+            my.drawBuffer(complete);
         } else {
-            return load();
+            complete();
+        }
+
+        function complete () {
+            if (loadOnInteraction) {
+                my.tmpEvents.push(my.once('interaction', function (result) { load(result); }));
+            } else {
+                my.drawer.updateProgress(0);
+                return load();
+            }
         }
     },
 
@@ -513,8 +510,7 @@ var WaveSurfer = {
 
         this.tmpEvents.push(
             this.backend.once('canplay', (function () {
-                this.drawBuffer();
-                this.fireEvent('ready');
+                var my = this; my.drawBuffer(function () { my.fireEvent('ready'); });
             }).bind(this)),
 
             this.backend.once('error', (function (err) {
@@ -530,10 +526,10 @@ var WaveSurfer = {
         if ((!peaks || this.params.forceDecode) && this.backend.supportsWebAudio()) {
             this.getArrayBuffer(url, (function (arraybuffer) {
                 this.decodeArrayBuffer(arraybuffer, (function (buffer) {
-                    this.backend.buffer = buffer;
-                    this.backend.setPeaks(null);
-                    this.drawBuffer();
-                    this.fireEvent('waveform-ready');
+                    var my = this;
+                    my.backend.buffer = buffer;
+                    my.backend.setPeaks(null);
+                    my.drawBuffer(function () { my.fireEvent('waveform-ready'); });
                 }).bind(this));
             }).bind(this));
         }
