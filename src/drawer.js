@@ -46,16 +46,18 @@ WaveSurfer.Drawer = {
         var clientX = e.targetTouches ? e.targetTouches[0].clientX : e.clientX;
         var bbox = this.wrapper.getBoundingClientRect();
 
-        var nominalWidth = this.width;
-        var parentWidth = this.getWidth();
+        var visibleWidth = this.width;
+        var containerWidth = this.getWidth();
 
-        if (!this.params.fillParent && nominalWidth < parentWidth) {
-            var numerator = (clientX - bbox.left) * this.params.pixelRatio;
-            var denominator = nominalWidth - 1;
+        // If the entire container is not filled and further if the nominal width is less than the parent width...
+        if (!this.params.fillParent && visibleWidth < containerWidth) {
+            var numerator = (clientX - bbox.left) * this.params.pixelRatiol // Apparently we need to scale this here...
+            var denominator = visibleWidth - 1;
         } else {
-            var numerator = (clientX - bbox.left + this.wrapper.scrollLeft);
-            var denominator = this.wrapper.scrollWidth - 1;
+            var numerator = clientX - bbox.left + this.wrapper.scrollLeft;
+            var denominator = this.getScrollWidth() - 1;
         }
+
         // The clicked pixel is never equal the width. It's always 1 pixel less.
         // A 100-pixel element can be clicked at position 0 through position 99. And the range must include 0 as well as 1.
         // Thus, clicking at the 100th pixel (99) means progress is 1, not 99/100 or .99.
@@ -87,7 +89,7 @@ WaveSurfer.Drawer = {
         });
     },
 
-    drawPeaks: WaveSurfer.util.frame(function (peaks, length, start, end) {
+    drawPeaks: WaveSurfer.util.frame(function (peaks, length, start, end, callback) {
         var my = this;
 
         my.setWidth(length);
@@ -95,19 +97,23 @@ WaveSurfer.Drawer = {
         // Clear the canvas.
         my.clearCanvas();
 
-        // Run the draw function if there are no channels to split. Otherwise, split the channels.
-        if (!my.params.splitChannels) {
-            drawFunction(peaks, 0);
-        } else {
-            var channels = peaks;
-            my.setHeight(channels.length * my.params.height * my.params.pixelRatio);
-            channels.forEach(function(channelPeaks, channelIndex) {drawFunction(peaks, channelIndex); });
-        }
-
-        function drawFunction (peaks, channelIndex) {
-            // Extract peaks if they are in an array.
-            if (peaks[0] instanceof Array) { peaks = peaks[0]; }
-            my[my.params.barWidth ? "drawBars" : "drawWave"](peaks, channelIndex, start, end);
+        if (peaks instanceof Function) { peaks(inner); } else { inner(peaks, length, start, end); }
+        callback();
+        
+        function inner (peaks, length, start, end) {
+            // Run the draw function if there are no channels to split. Otherwise, split the channels.
+            if (!my.params.splitChannels) {
+                drawFunction(peaks, 0);
+            } else {
+                var channels = peaks;
+                my.setHeight(channels.length * my.params.height * my.params.pixelRatio);
+                channels.forEach(function(channelPeaks, channelIndex) {drawFunction(peaks, channelIndex); });
+            }
+            function drawFunction (peaks, channelIndex) {
+                // Extract peaks if they are in an array.
+                if (peaks[0] instanceof Array) { peaks = peaks[0]; }
+                my[my.params.barWidth ? "drawBars" : "drawWave"](peaks, channelIndex, start, end);
+            }
         }
     }),
 
@@ -126,38 +132,14 @@ WaveSurfer.Drawer = {
         }
     },
 
-    recenter: function (percent) {
-        var position = this.wrapper.scrollWidth * percent;
-        this.recenterOnPosition(position, true);
+    recenter: function (proportion) {
+        this.recenterOnPosition(proportion * this.getScrollWidth(), 1);
     },
 
-    recenterOnPosition: function (position, immediate) {
-        var scrollLeft = this.wrapper.scrollLeft;
-        var half = ~~(this.wrapper.clientWidth / 2);
-        var target = position - half;
-        var offset = target - scrollLeft;
-        var maxScroll = this.wrapper.scrollWidth - this.wrapper.clientWidth;
-
-        if (maxScroll == 0) {
-            // no need to continue if scrollbar is not there
-            return;
-        }
-
-        // if the cursor is currently visible...
-        if (!immediate && -half <= offset && offset < half) {
-            // we'll limit the "re-center" rate.
-            var rate = 5;
-            offset = Math.max(-rate, Math.min(rate, offset));
-            target = scrollLeft + offset;
-        }
-
-        // limit target to valid range (0 to maxScroll)
-        target = Math.max(0, Math.min(maxScroll, target));
-        // no use attempting to scroll if we're not moving
-        if (target != scrollLeft) {
-            this.wrapper.scrollLeft = target;
-        }
-
+    recenterOnPosition: function (position, scrollSpeed) {
+        scrollSpeed = .5;
+        var newScroll = position - this.wrapper.clientWidth / 2;
+        this.wrapper.scrollLeft = (this.wrapper.scrollLeft * (1 - scrollSpeed) + newScroll * scrollSpeed) || 0;
     },
 
     getScrollX: function() {
@@ -168,11 +150,14 @@ WaveSurfer.Drawer = {
         return Math.round(this.container.clientWidth * this.params.pixelRatio);
     },
 
+    getScrollWidth: function () {
+        return this.wrapper.scrollWidth;
+    },
+
     setWidth: function (width) {
         if (this.width == width) { return; }
 
         this.width = width;
-
         if (this.params.fillParent || this.params.scrollParent) {
             this.style(this.wrapper, {
                 width: ''
@@ -197,17 +182,16 @@ WaveSurfer.Drawer = {
 
     progress: function (progress) {
         var minPxDelta = 1 / this.params.pixelRatio;
-        var pos = Math.ceil(progress * this.width) * minPxDelta;
+        var pos = Math.round(progress * this.width) * minPxDelta;
+
         if (pos < this.lastPos || pos - this.lastPos >= minPxDelta) {
-            this.lastPos = pos;
-
+            this.lastPos = pos
             if (this.params.scrollParent && this.params.autoCenter) {
-                var newPos = ~~(this.wrapper.scrollWidth * progress);
-                this.recenterOnPosition(newPos);
+                var newPos = ~~(this.getScrollWidth() * progress);
+                this.recenterOnPosition(newPos, .8);
             }
-
-            this.updateProgress(pos);
-        }
+         }
+         this.updateProgress(pos);
     },
 
     destroy: function () {
