@@ -98,7 +98,7 @@ WaveSurfer.Drawer = {
         my.clearCanvas();
 
         if (peaks instanceof Function) { peaks(inner); } else { inner(peaks, length, start, end); }
-        callback();
+        if (callback) callback();
         
         function inner (peaks, length, start, end) {
             // Run the draw function if there are no channels to split. Otherwise, split the channels.
