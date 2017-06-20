@@ -3,7 +3,6 @@
 WaveSurfer.Drawer.MultiCanvas = Object.create(WaveSurfer.Drawer);
 
 WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
-
     initDrawer: function (params) {
         this.maxCanvasWidth = params.maxCanvasWidth != null ? params.maxCanvasWidth : 4000;
         this.maxCanvasElementWidth = Math.round(this.maxCanvasWidth / this.params.pixelRatio);
@@ -64,14 +63,14 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
         while (this.canvases.length < requiredCanvases) { this.addCanvas(); }
         while (this.canvases.length > requiredCanvases) { this.removeCanvas(); }
 
-        this.canvases.forEach (function (canvas, i) {
+        this.canvases.forEach (function (canvas, canvasIndex) {
             // Add some overlap to prevent vertical white stripes; keep the width even for simplicity.
-            if (i != this.canvases.length - 1) {
-                var canvasWidth = this.maxCanvasWidth + 2 * Math.ceil(this.params.pixelRatio / 2);
+            if (canvasIndex != this.canvases.length - 1) {
+                var canvasWidth = this.maxCanvasWidth + (this.invertTransparency ? 0 : 2 * Math.ceil(this.params.pixelRatio / 2));
             } else {
                 var canvasWidth = this.width - (this.maxCanvasWidth * (this.canvases.length - 1));
             }
-            this.updateDimensions(canvas, canvasWidth, this.height);
+            this.updateDimensions(canvas, canvasIndex, canvasWidth, this.height);
             this.clearWaveType(canvas);
         }, this);
     },
@@ -93,17 +92,17 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
     },
 
     removeCanvas: function () {
-        var lastEntry = this.canvases.pop();
-        lastEntry.wave.parentElement.removeChild(lastEntry.wave);
-        if (lastEntry.progressWave) { lastEntry.progressWave.parentElement.removeChild(lastEntry.progressWave); }
+        var lastCanvas = this.canvases.pop();
+        lastCanvas.wave.parentElement.removeChild(lastCanvas.wave);
+        if (lastCanvas.progressWave) { lastCanvas.progressWave.parentElement.removeChild(lastCanvas.progressWave); }
     },
 
-    updateDimensions: function (canvas, width, height) {
+    updateDimensions: function (canvas, canvasIndex, width, height) {
         var elementWidth = Math.round(width / this.params.pixelRatio);
         var totalWidth   = Math.round(this.width / this.params.pixelRatio);
 
         // Specify where the canvas starts and ends in the waveform, represented as a decimal between 0 and 1.
-        canvas.start = (canvas.waveCtx.canvas.offsetLeft / totalWidth) || 0;
+        canvas.start = (this.maxCanvasElementWidth * canvasIndex) / totalWidth;
         canvas.end = canvas.start + elementWidth / totalWidth;
 
         canvas.waveCtx.canvas.width = width;
@@ -192,7 +191,6 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
             var min = WaveSurfer.util.min(peaks);
             var absmax = -min > max ? -min : max;
         }
-
         this.drawLine(peaks, absmax, halfH, offsetY, start, end);
 
         // Always draw a median line.
@@ -233,18 +231,15 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
     drawLineToContext: function (canvas, ctx, peaks, absmax, halfH, offsetY, start, end) {
         if (!ctx) { return; }
 
-        var length = peaks.length / 2;
-
-        var scale = 1;
-        if (this.params.fillParent && this.width != length) { scale = this.width / length; }
+        var length = peaks.length / 2; // / 2???
+        var scale = (this.params.fillParent && this.width != length) ? this.width / length : 1;
 
         var first = Math.round(length * canvas.start);
-        var last = Math.round(length * canvas.end);
+        var last = Math.round(length * canvas.end) + 1;
         if (first > end || last < start) { return; }
 
         var canvasStart = Math.max(first, start);
         var canvasEnd = Math.min(last, end);
-
         ctx.beginPath();
         ctx.moveTo((canvasStart - first) * scale + this.halfPixel, halfH + offsetY);
 
@@ -305,9 +300,10 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
     },
 
     updateProgress: function (pos) {
-        this.style(this.wave, { left: pos + 'px', width: 'calc(100% - ' + pos + 'px)' });
+        var totalWidth = this.width / this.params.pixelRatio;
+        this.style(this.wave, { left: pos + 'px', width: (totalWidth - pos) + 'px' });
         this.canvases.forEach (function (canvas, i) {
-            this.style(canvas.wave, { left: -pos + 'px' });
+            this.style(canvas.wave, { marginLeft: -pos + 'px' });
         }, this);
         var cursorPos = pos - ((this.params.cursorAlignment == 'right') ? 0
             : (this.params.cursorAlignment == 'middle') ? (this.params.cursorWidth / 2)
@@ -316,6 +312,9 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
         if (this.progressWave) { this.style(this.progressWave, { width: pos + 'px' }); }
     },
 
+    getScrollWidth: function () {
+        return this.width / this.params.pixelRatio;
+    },
     /**
      * Combine all available canvases together.
      *
