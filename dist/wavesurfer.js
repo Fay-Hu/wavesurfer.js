@@ -1,4 +1,4 @@
-/*! wavesurfer.js 1.4.0A (Sat, 17 Jun 2017)
+/*! wavesurfer.js 1.4.0A (Monday, 19 Jun 2017)
 * https://github.com/katspaugh/wavesurfer.js
 * @license BSD-3-Clause
 */
@@ -127,42 +127,38 @@ var WaveSurfer = {
         this.isDestroyed = false;
         my.on ('ready', function () {
             my.audioIsReady = true;
-            if (my.progress !== undefined) { my.seekTo(my.progress); }
+            if (my.backend.lastClickPosition !== undefined) { my.seekTo(my.backend.lastClickPosition); }
         });
     },
 
     createDrawer: function () {
         var my = this;
-        this.drawer = Object.create(WaveSurfer.Drawer[this.params.renderer]);
-        this.drawer.init(this.container, this.params, this.aliases);
+        my.drawer = Object.create(WaveSurfer.Drawer[my.params.renderer]);
+        my.drawer.init(my.container, my.params, my.aliases);
 
-        this.drawer.on('redraw', function () {
-            my.drawBuffer();
-            my.drawer.progress(my.backend.getPlayedPercents());
+        my.drawer.on('redraw', function () {
+            my.drawBuffer(function () { my.drawer.progress(my.backend.getPlayedPercents()); });
         });
 
         // Click-to-seek
-        this.drawer.on('click', function (e, progress) {
-            setTimeout(function () {
-                my.seekTo(progress);
-            }, 0);
+        my.drawer.on('click', function (e, progress) {
+            setTimeout(function () { my.seekTo(progress); }, 0);
         });
 
         // Relay the scroll event from the drawer
-        this.drawer.on('scroll', function (e) {
+        my.drawer.on('scroll', function (e) {
             if (my.params.partialRender) {
-                my.drawBuffer();
+                my.drawBuffer(function () {my.fireEvent('scroll', e); });
+            } else {
+                my.fireEvent('scroll', e);
             }
-            my.fireEvent('scroll', e);
         });
     },
 
     createBackend: function () {
         var my = this;
 
-        if (this.backend) {
-            this.backend.destroy();
-        }
+        if (this.backend) { this.backend.destroy(); }
 
         // Back compat
         if (this.params.backend == 'AudioElement') {
@@ -249,8 +245,7 @@ var WaveSurfer = {
     },
 
     seekTo: function (progress) {
-        this.progress = progress
-
+        this.lastClickPosition = progress;
         this.fireEvent('interaction', this.seekTo.bind(this, progress));
 
         var paused = this.backend.isPaused();
@@ -258,15 +253,13 @@ var WaveSurfer = {
         if (!paused) {
             this.backend.pause();
         }
-        // avoid small scrolls while paused seeking
+        // avoid small scrolls while seeking is paused.
         var oldScrollParent = this.params.scrollParent;
         this.params.scrollParent = false;
         this.backend.seekTo(progress * this.getDuration());
         this.drawer.progress(progress);
 
-        if (!paused) {
-            this.backend.play();
-        }
+        if (!paused) { this.backend.play(); }
         this.params.scrollParent = oldScrollParent;
         this.fireEvent('seek', progress);
     },
@@ -366,6 +359,12 @@ var WaveSurfer = {
         this.params.interact = !this.params.interact;
     },
 
+    getNumberOfChannels: function () {
+      return this.backend.buffer ? this.backend.buffer.numberOfChannels :
+             this.backend.preload ? this.backend.preload.numberOfChannels :
+            (this.backend.peaks[0] instanceof Array) ? this.backend.peaks.length : 2;
+    },
+
     getComputedWidthAndRange: function () {
         var nominalWidth = Math.round(this.getDuration() * this.params.minPxPerSec * this.params.pixelRatio);
         var parentWidth = this.drawer.getWidth();
@@ -383,45 +382,44 @@ var WaveSurfer = {
         return { width: width, start: start, end: end };
     },
 
-    drawBuffer: function () {
+    drawBuffer: function (callback) {
         var wse = this.getComputedWidthAndRange();
         var width = wse.width, start = wse.start, end = wse.end;
-
-        if (this.params.partialRender) {
-            var newRanges = this.peakCache.addRangeToPeakCache(width, start, end);
-            for (var i = 0; i < newRanges.length; i++) {
-              var peaks = this.backend.getPeaks(width, newRanges[i][0], newRanges[i][1]);
-              this.drawer.drawPeaks(peaks, width, newRanges[i][0], newRanges[i][1]);
+        var my = this;
+        if (my.params.partialRender) {
+            var newRanges = my.peakCache.addRangeToPeakCache(width, start, end);
+            var peaks = function (inner) {
+                for (var i = 0; i < newRanges.length; i++) {
+                    var peaks = my.backend.getPeaks(width, newRanges[i][0], newRanges[i][1]);
+                    inner(peaks, width, newRanges[i][0], newRanges[i][1]);
+                }
             }
         } else {
-            if (!('peaks' in this.backend)) {
+            if (!('peaks' in my.backend)) {
                 var subrangeLength = width;
             } else {
-                var numberOfChannels = this.backend.buffer ? this.backend.buffer.numberOfChannels :
-                    this.backend.preload ? this.backend.preload.numberOfChannels :
-                    (this.backend.peaks[0] instanceof Array) ? this.backend.peaks.length : 2;
-                var subrangeLength = ((this.backend.peaks[0] instanceof Array) ? this.backend.peaks[0].length : this.backend.peaks.length) / numberOfChannels;
+                var numberOfChannels = my.getNumberOfChannels();
+                var subrangeLength = ((my.backend.peaks[0] instanceof Array) ? my.backend.peaks[0].length : my.backend.peaks.length) / numberOfChannels;
             }
             start = 0;
             end = subrangeLength - 1;
-            var peaks = this.backend.getPeaks(subrangeLength, start, end);
-            this.drawer.drawPeaks(peaks, width, start, end);
+            var peaks = my.backend.getPeaks(subrangeLength, start, end);
         }
-        this.fireEvent('redraw', peaks, width);
+        my.drawer.drawPeaks(peaks, width, start, end, function () { callback(); my.fireEvent('redraw', peaks, width);  });
     },
 
     zoom: function (pxPerSec) {
         this.params.minPxPerSec = pxPerSec;
-
         this.params.scrollParent = true;
-
-        this.drawBuffer();
-        this.drawer.progress(this.backend.getPlayedPercents());
-
-        this.drawer.recenter(
-            this.getCurrentTime() / this.getDuration()
-        );
-        this.fireEvent('zoom', pxPerSec);
+        var my = this;
+        this.drawBuffer(function () {
+            var drawer = my.drawer
+            var progress = my.backend.getPlayedPercents();
+            if (progress === 0 && my.lastClickPosition != 0) progress = my.lastClickPosition;
+            drawer.updateProgress(drawer.width / my.params.pixelRatio * progress);
+            my.drawer.recenter(progress);
+            my.fireEvent('zoom', pxPerSec);
+        })
     },
 
     /**
@@ -439,9 +437,9 @@ var WaveSurfer = {
      * Directly load an externally decoded AudioBuffer.
      */
     loadDecodedBuffer: function (buffer) {
-        this.backend.load(buffer);
-        this.drawBuffer();
-        this.fireEvent('ready');
+        var my = this;
+        my.backend.load(buffer);
+        my.drawBuffer(function () { my.fireEvent('ready'); })
     },
 
     /**
@@ -483,21 +481,28 @@ var WaveSurfer = {
      * Loads audio using Web Audio buffer backend.
      */
     loadBuffer: function (url, peaks, preload, loadOnInteraction) {
-        var load = (function (action) {
+        var my = this;
+        var load = function (action) {
             if (action) {
-                this.tmpEvents.push(this.once('ready', action));
+                my.tmpEvents.push(my.once('ready', action));
             }
-            return this.getArrayBuffer(url, this.loadArrayBuffer.bind(this));
-        }).bind(this);
+            return my.getArrayBuffer(url, my.loadArrayBuffer.bind(my));
+        };
 
         if (peaks) {
-            this.backend.setPeaks(peaks);
-            this.drawBuffer();
-        }
-        if (loadOnInteraction) {
-            this.tmpEvents.push(this.once('interaction', function (result) { load(result); }));
+            my.backend.setPeaks(peaks);
+            my.drawBuffer(complete);
         } else {
-            return load();
+            complete();
+        }
+
+        function complete () {
+            if (loadOnInteraction) {
+                my.tmpEvents.push(my.once('interaction', function (result) { load(result); }));
+            } else {
+                my.drawer.updateProgress(0);
+                return load();
+            }
         }
     },
 
@@ -526,8 +531,7 @@ var WaveSurfer = {
 
         this.tmpEvents.push(
             this.backend.once('canplay', (function () {
-                this.drawBuffer();
-                this.fireEvent('ready');
+                var my = this; my.drawBuffer(function () { my.fireEvent('ready'); });
             }).bind(this)),
 
             this.backend.once('error', (function (err) {
@@ -543,10 +547,10 @@ var WaveSurfer = {
         if ((!peaks || this.params.forceDecode) && this.backend.supportsWebAudio()) {
             this.getArrayBuffer(url, (function (arraybuffer) {
                 this.decodeArrayBuffer(arraybuffer, (function (buffer) {
-                    this.backend.buffer = buffer;
-                    this.backend.setPeaks(null);
-                    this.drawBuffer();
-                    this.fireEvent('waveform-ready');
+                    var my = this;
+                    my.backend.buffer = buffer;
+                    my.backend.setPeaks(null);
+                    my.drawBuffer(function () { my.fireEvent('waveform-ready'); });
                 }).bind(this));
             }).bind(this));
         }
@@ -1300,6 +1304,7 @@ WaveSurfer.WebAudio = {
     play: function (start, end) {
         if (!this.buffer) { return; }
 
+        this.lastClickPosition = undefined;
         // need to re-create source on each playback
         this.createSource();
         var adjustedTime = this.seekTo(start, end);
@@ -1682,16 +1687,18 @@ WaveSurfer.Drawer = {
         var clientX = e.targetTouches ? e.targetTouches[0].clientX : e.clientX;
         var bbox = this.wrapper.getBoundingClientRect();
 
-        var nominalWidth = this.width;
-        var parentWidth = this.getWidth();
+        var visibleWidth = this.width;
+        var containerWidth = this.getWidth();
 
-        if (!this.params.fillParent && nominalWidth < parentWidth) {
-            var numerator = (clientX - bbox.left) * this.params.pixelRatio;
-            var denominator = nominalWidth - 1;
+        // If the entire container is not filled and further if the nominal width is less than the parent width...
+        if (!this.params.fillParent && visibleWidth < containerWidth) {
+            var numerator = (clientX - bbox.left) * this.params.pixelRatiol // Apparently we need to scale this here...
+            var denominator = visibleWidth - 1;
         } else {
-            var numerator = (clientX - bbox.left + this.wrapper.scrollLeft);
-            var denominator = this.wrapper.scrollWidth - 1;
+            var numerator = clientX - bbox.left + this.wrapper.scrollLeft;
+            var denominator = this.getScrollWidth() - 1;
         }
+
         // The clicked pixel is never equal the width. It's always 1 pixel less.
         // A 100-pixel element can be clicked at position 0 through position 99. And the range must include 0 as well as 1.
         // Thus, clicking at the 100th pixel (99) means progress is 1, not 99/100 or .99.
@@ -1723,7 +1730,7 @@ WaveSurfer.Drawer = {
         });
     },
 
-    drawPeaks: WaveSurfer.util.frame(function (peaks, length, start, end) {
+    drawPeaks: WaveSurfer.util.frame(function (peaks, length, start, end, callback) {
         var my = this;
 
         my.setWidth(length);
@@ -1731,19 +1738,23 @@ WaveSurfer.Drawer = {
         // Clear the canvas.
         my.clearCanvas();
 
-        // Run the draw function if there are no channels to split. Otherwise, split the channels.
-        if (!my.params.splitChannels) {
-            drawFunction(peaks, 0);
-        } else {
-            var channels = peaks;
-            my.setHeight(channels.length * my.params.height * my.params.pixelRatio);
-            channels.forEach(function(channelPeaks, channelIndex) {drawFunction(peaks, channelIndex); });
-        }
-
-        function drawFunction (peaks, channelIndex) {
-            // Extract peaks if they are in an array.
-            if (peaks[0] instanceof Array) { peaks = peaks[0]; }
-            my[my.params.barWidth ? "drawBars" : "drawWave"](peaks, channelIndex, start, end);
+        if (peaks instanceof Function) { peaks(inner); } else { inner(peaks, length, start, end); }
+        callback();
+        
+        function inner (peaks, length, start, end) {
+            // Run the draw function if there are no channels to split. Otherwise, split the channels.
+            if (!my.params.splitChannels) {
+                drawFunction(peaks, 0);
+            } else {
+                var channels = peaks;
+                my.setHeight(channels.length * my.params.height * my.params.pixelRatio);
+                channels.forEach(function(channelPeaks, channelIndex) {drawFunction(peaks, channelIndex); });
+            }
+            function drawFunction (peaks, channelIndex) {
+                // Extract peaks if they are in an array.
+                if (peaks[0] instanceof Array) { peaks = peaks[0]; }
+                my[my.params.barWidth ? "drawBars" : "drawWave"](peaks, channelIndex, start, end);
+            }
         }
     }),
 
@@ -1762,38 +1773,14 @@ WaveSurfer.Drawer = {
         }
     },
 
-    recenter: function (percent) {
-        var position = this.wrapper.scrollWidth * percent;
-        this.recenterOnPosition(position, true);
+    recenter: function (proportion) {
+        this.recenterOnPosition(proportion * this.getScrollWidth(), 1);
     },
 
-    recenterOnPosition: function (position, immediate) {
-        var scrollLeft = this.wrapper.scrollLeft;
-        var half = ~~(this.wrapper.clientWidth / 2);
-        var target = position - half;
-        var offset = target - scrollLeft;
-        var maxScroll = this.wrapper.scrollWidth - this.wrapper.clientWidth;
-
-        if (maxScroll == 0) {
-            // no need to continue if scrollbar is not there
-            return;
-        }
-
-        // if the cursor is currently visible...
-        if (!immediate && -half <= offset && offset < half) {
-            // we'll limit the "re-center" rate.
-            var rate = 5;
-            offset = Math.max(-rate, Math.min(rate, offset));
-            target = scrollLeft + offset;
-        }
-
-        // limit target to valid range (0 to maxScroll)
-        target = Math.max(0, Math.min(maxScroll, target));
-        // no use attempting to scroll if we're not moving
-        if (target != scrollLeft) {
-            this.wrapper.scrollLeft = target;
-        }
-
+    recenterOnPosition: function (position, scrollSpeed) {
+        scrollSpeed = .5;
+        var newScroll = position - this.wrapper.clientWidth / 2;
+        this.wrapper.scrollLeft = (this.wrapper.scrollLeft * (1 - scrollSpeed) + newScroll * scrollSpeed) || 0;
     },
 
     getScrollX: function() {
@@ -1804,11 +1791,14 @@ WaveSurfer.Drawer = {
         return Math.round(this.container.clientWidth * this.params.pixelRatio);
     },
 
+    getScrollWidth: function () {
+        return this.wrapper.scrollWidth;
+    },
+
     setWidth: function (width) {
         if (this.width == width) { return; }
 
         this.width = width;
-
         if (this.params.fillParent || this.params.scrollParent) {
             this.style(this.wrapper, {
                 width: ''
@@ -1833,17 +1823,16 @@ WaveSurfer.Drawer = {
 
     progress: function (progress) {
         var minPxDelta = 1 / this.params.pixelRatio;
-        var pos = Math.ceil(progress * this.width) * minPxDelta;
+        var pos = Math.round(progress * this.width) * minPxDelta;
+
         if (pos < this.lastPos || pos - this.lastPos >= minPxDelta) {
-            this.lastPos = pos;
-
+            this.lastPos = pos
             if (this.params.scrollParent && this.params.autoCenter) {
-                var newPos = ~~(this.wrapper.scrollWidth * progress);
-                this.recenterOnPosition(newPos);
+                var newPos = ~~(this.getScrollWidth() * progress);
+                this.recenterOnPosition(newPos, .8);
             }
-
-            this.updateProgress(pos);
-        }
+         }
+         this.updateProgress(pos);
     },
 
     destroy: function () {
@@ -1935,14 +1924,14 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
         while (this.canvases.length < requiredCanvases) { this.addCanvas(); }
         while (this.canvases.length > requiredCanvases) { this.removeCanvas(); }
 
-        this.canvases.forEach (function (canvas, i) {
+        this.canvases.forEach (function (canvas, canvasIndex) {
             // Add some overlap to prevent vertical white stripes; keep the width even for simplicity.
-            if (i != this.canvases.length - 1) {
-                var canvasWidth = this.maxCanvasWidth + 2 * Math.ceil(this.params.pixelRatio / 2);
+            if (canvasIndex != this.canvases.length - 1) {
+                var canvasWidth = this.maxCanvasWidth + (this.invertTransparency ? 0 : 2 * Math.ceil(this.params.pixelRatio / 2));
             } else {
                 var canvasWidth = this.width - (this.maxCanvasWidth * (this.canvases.length - 1));
             }
-            this.updateDimensions(canvas, canvasWidth, this.height);
+            this.updateDimensions(canvas, canvasIndex, canvasWidth, this.height);
             this.clearWaveType(canvas);
         }, this);
     },
@@ -1964,17 +1953,17 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
     },
 
     removeCanvas: function () {
-        var lastEntry = this.canvases.pop();
-        lastEntry.wave.parentElement.removeChild(lastEntry.wave);
-        if (lastEntry.progressWave) { lastEntry.progressWave.parentElement.removeChild(lastEntry.progressWave); }
+        var lastCanvas = this.canvases.pop();
+        lastCanvas.wave.parentElement.removeChild(lastCanvas.wave);
+        if (lastCanvas.progressWave) { lastCanvas.progressWave.parentElement.removeChild(lastCanvas.progressWave); }
     },
 
-    updateDimensions: function (canvas, width, height) {
+    updateDimensions: function (canvas, canvasIndex, width, height) {
         var elementWidth = Math.round(width / this.params.pixelRatio);
         var totalWidth   = Math.round(this.width / this.params.pixelRatio);
 
         // Specify where the canvas starts and ends in the waveform, represented as a decimal between 0 and 1.
-        canvas.start = (canvas.waveCtx.canvas.offsetLeft / totalWidth) || 0;
+        canvas.start = (this.maxCanvasElementWidth * canvasIndex) / totalWidth;
         canvas.end = canvas.start + elementWidth / totalWidth;
 
         canvas.waveCtx.canvas.width = width;
@@ -2063,7 +2052,6 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
             var min = WaveSurfer.util.min(peaks);
             var absmax = -min > max ? -min : max;
         }
-
         this.drawLine(peaks, absmax, halfH, offsetY, start, end);
 
         // Always draw a median line.
@@ -2104,18 +2092,15 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
     drawLineToContext: function (canvas, ctx, peaks, absmax, halfH, offsetY, start, end) {
         if (!ctx) { return; }
 
-        var length = peaks.length / 2;
-
-        var scale = 1;
-        if (this.params.fillParent && this.width != length) { scale = this.width / length; }
+        var length = peaks.length / 2; // / 2???
+        var scale = (this.params.fillParent && this.width != length) ? this.width / length : 1;
 
         var first = Math.round(length * canvas.start);
-        var last = Math.round(length * canvas.end);
+        var last = Math.round(length * canvas.end) + 1;
         if (first > end || last < start) { return; }
 
         var canvasStart = Math.max(first, start);
         var canvasEnd = Math.min(last, end);
-
         ctx.beginPath();
         ctx.moveTo((canvasStart - first) * scale + this.halfPixel, halfH + offsetY);
 
@@ -2176,9 +2161,10 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
     },
 
     updateProgress: function (pos) {
-        this.style(this.wave, { left: pos + 'px', width: 'calc(100% - ' + pos + 'px)' });
+        var totalWidth = this.width / this.params.pixelRatio;
+        this.style(this.wave, { left: pos + 'px', width: (totalWidth - pos) + 'px' });
         this.canvases.forEach (function (canvas, i) {
-            this.style(canvas.wave, { left: -pos + 'px' });
+            this.style(canvas.wave, { marginLeft: -pos + 'px' });
         }, this);
         var cursorPos = pos - ((this.params.cursorAlignment == 'right') ? 0
             : (this.params.cursorAlignment == 'middle') ? (this.params.cursorWidth / 2)
@@ -2187,6 +2173,9 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
         if (this.progressWave) { this.style(this.progressWave, { width: pos + 'px' }); }
     },
 
+    getScrollWidth: function () {
+        return this.width / this.params.pixelRatio;
+    },
     /**
      * Combine all available canvases together.
      *
@@ -2231,7 +2220,6 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.Canvas, {
         while (this.canvases.length > requiredCanvases) { this.removeCanvas(); }
 
         this.canvases.forEach (function (canvas, i) {
-            // Add some overlap to prevent vertical white stripes; keep the width even for simplicity.
             this.updateDimensions(canvas, this.width, this.height);
             this.clearWaveType(canvas);
         }, this);
@@ -2239,7 +2227,6 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.Canvas, {
 });
 
 'use strict';
-
 
 WaveSurfer.Drawer.None = Object.create(WaveSurfer.Drawer);
 
@@ -2310,10 +2297,6 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.None, {
     getImage: function (type, quality) {
     }
 });
-
-
-
-
 
 'use strict';
 
@@ -2399,7 +2382,6 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.SplitWavePointPlot, {
      * @param end
      */
     drawPeaks: function (peaks, length, start, end) {
-
         //make sure that the plot array is already loaded
         if (this.plotArrayLoaded == true) {
             this.setWidth(length);
