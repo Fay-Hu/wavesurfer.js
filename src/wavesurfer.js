@@ -452,13 +452,14 @@ var WaveSurfer = {
      * Loads audio and re-renders the waveform.
      */
     load: function (url, peaks, preload, loadOnInteraction) {
-        this.empty({drawPeaks: peaks === undefined});
-        this.isMuted = false;
-
-        switch (this.params.backend) {
-            case 'WebAudio': return this.loadBuffer(url, peaks, true, loadOnInteraction);
-            case 'MediaElement': return this.loadMediaElement(url, peaks, preload);
-        }
+        var my = this;
+        my.empty({drawPeaks: peaks === undefined}, function () {
+            my.isMuted = false;
+            switch (my.params.backend) {
+                case 'WebAudio': return my.loadBuffer(url, peaks, true, loadOnInteraction);
+                case 'MediaElement': return my.loadMediaElement(url, peaks, preload);
+            }
+        });
     },
 
     /**
