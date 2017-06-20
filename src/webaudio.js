@@ -355,6 +355,7 @@ WaveSurfer.WebAudio = {
     play: function (start, end) {
         if (!this.buffer) { return; }
 
+        this.lastClickPosition = undefined;
         // need to re-create source on each playback
         this.createSource();
         var adjustedTime = this.seekTo(start, end);
