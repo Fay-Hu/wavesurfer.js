@@ -3,6 +3,7 @@
 /* Init from HTML */
 (function () {
     var init = function () {
+
         var containers = document.querySelectorAll('wavesurfer');
 
         Array.prototype.forEach.call(containers, function (el) {
@@ -19,7 +20,6 @@
             if (el.dataset.peaks) {
                 var peaks = JSON.parse(el.dataset.peaks);
             }
-
             wavesurfer.load(el.dataset.url, peaks);
         });
     };
