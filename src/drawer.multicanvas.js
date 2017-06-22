@@ -48,9 +48,9 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
                 display: 'none'
             }))
         );
-        WaveSurfer.util.refreshAliases (this.aliases, {
+        WaveSurfer.util.refreshAliases(this.aliases, {
             cursorColor: { styleSource: {object: this.cursor.style, property: 'backgroundColor'} },
-            cursorWidth: { styleSource: {object: this.cursor.style, property: 'width'} },
+            cursorWidth: { styleSource: {object: this.cursor.style, property: 'width'}, get: function (n) { return parseFloat(n); }, set: function (n) { return n + 'px'; }},
         });
         if (params.classList.cursor) { this.cursor.classList.add(params.classList.cursor); }
         this.addCanvas();
@@ -157,6 +157,7 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
         }
 
         var scale = length / this.width;
+        this.fillRect(0, 0, this.width, height, 'background');
 
         for (var i = (start / scale); i < (end / scale); i += step) {
             var peak = peaks[Math.floor(i * scale * peakIndexScale)] || 0;
@@ -191,6 +192,9 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
             var min = WaveSurfer.util.min(peaks);
             var absmax = -min > max ? -min : max;
         }
+
+        this.fillRect(0, 0, this.width, height, 'background');
+
         this.drawLine(peaks, absmax, halfH, offsetY, start, end);
 
         // Always draw a median line.
@@ -261,14 +265,13 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
         ctx.fill();
     },
 
-    fillRect: function (x, y, width, height) {
+    fillRect: function (x, y, width, height, fillLayer) {
+        var fillLayer = (fillLayer === undefined) ? 'foreground' : fillLayer;
         var startCanvas = Math.floor(x / this.maxCanvasWidth);
         var endCanvas   = Math.min(Math.ceil((x + width) / this.maxCanvasWidth) + 1, this.canvases.length);
-
         for (var i = startCanvas; i < endCanvas; i++) {
             var canvas = this.canvases[i];
             var leftOffset = i * this.maxCanvasWidth;
-
             var intersection = {
                 x1: Math.max(x, i * this.maxCanvasWidth),
                 y1: y,
@@ -277,8 +280,14 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
             };
 
             if (intersection.x1 < intersection.x2) {
-                this.setFillStyles(canvas);
                 ['wave'].concat(canvas.progressWaveCtx ? ['progressWave'] : []).forEach (function (waveType) {
+                    var uniqueProp = (waveType == 'wave') ? 'wave' : 'progress';
+                    if ((fillLayer == 'background') &&
+                        (this.params[uniqueProp + 'BackgroundColor'] === undefined) &&
+                        (this.params.backgroundColor === undefined)) {
+                        return;
+                    }
+                    this.setFillStyles(canvas, waveType, fillLayer);
                     this.fillRectToContext(canvas[waveType + 'Ctx'],
                         intersection.x1 - leftOffset,
                         intersection.y1,
@@ -293,23 +302,64 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
         if (ctx) { ctx.fillRect(x, y, width, height); }
     },
 
-    setFillStyles: function (canvas) {
-        if (this.invertTransparency) { var cutColor = ('cutColor' in this.invertTransparency) ? this.invertTransparency.cutColor : '#fefefe'; }
-        canvas.waveCtx.fillStyle = this.invertTransparency ? cutColor : this.params.waveColor;
-        if (canvas.progressWaveCtx) { canvas.progressWaveCtx.fillStyle = this.invertTransparency ? cutColor : this.params.progressColor; }
+    setFillStyles: function (canvas, waveType, fillLayer) {
+        var fillLayer = (fillLayer === undefined) ? 'foreground' : fillLayer;
+        var params = this.params;
+        if (fillLayer == 'foreground') {
+            if (params.invertTransparency) {
+                var cutColor = (params.invertTransparency === 'object' && 'cutColor' in params.invertTransparency)
+                    ? params.invertTransparency.cutColor
+                    : '#fefefe';
+            }
+            if (waveType === undefined || waveType == 'wave') {
+                canvas.waveCtx.fillStyle = params.invertTransparency ? cutColor : params.waveColor;
+            }
+            if ((waveType === undefined || waveType == 'progressWave') && canvas.progressWaveCtx) {
+                canvas.progressWaveCtx.fillStyle = params.invertTransparency ? cutColor : params.progressColor;
+            }
+        } else {
+            if (waveType === undefined || waveType == 'wave') {
+                canvas.waveCtx.fillStyle = (params.waveBackgroundColor !== undefined)
+                    ? params.waveBackgroundColor
+                    : params.backgroundColor;
+            }
+            if ((waveType === undefined || waveType == 'progressWave') && canvas.progressWaveCtx) {
+                canvas.progressWaveCtx.fillStyle = (params.progressBackgroundColor !== undefined)
+                    ? params.progressBackgroundColor
+                    : params.backgroundColor;
+            }
+        }
     },
 
     updateProgress: function (pos) {
+        if (pos === undefined) pos = this.getCurrentPosition();
         var totalWidth = this.width / this.params.pixelRatio;
         this.style(this.wave, { left: pos + 'px', width: (totalWidth - pos) + 'px' });
         this.canvases.forEach (function (canvas, i) {
             this.style(canvas.wave, { marginLeft: -pos + 'px' });
         }, this);
+        this.updateCursorPosition(pos);
+        if (this.progressWave) { this.style(this.progressWave, { width: pos + 'px' }); }
+    },
+
+    updateCursorPosition: function (pos) {
+        if (pos === undefined) pos = this.getCurrentPosition();
         var cursorPos = pos - ((this.params.cursorAlignment == 'right') ? 0
             : (this.params.cursorAlignment == 'middle') ? (this.params.cursorWidth / 2)
             : this.params.cursorWidth);
         this.style(this.cursor, { left: cursorPos + 'px' });
-        if (this.progressWave) { this.style(this.progressWave, { width: pos + 'px' }); }
+    },
+
+    getCurrentPosition: function () {
+        var progress = this.wavesurfer.backend.getPlayedPercents();
+        if (progress === 0 && this.wavesurfer.lastClickPosition != 0) progress = this.wavesurfer.lastClickPosition;
+        return this.width / this.wavesurfer.params.pixelRatio * progress;
+    },
+
+    getCurrentProgress: function () {
+        var progress = this.wavesurfer.backend.getPlayedPercents();
+        if (progress === 0 && this.wavesurfer.lastClickPosition != 0) progress = this.wavesurfer.lastClickPosition;
+        return progress;
     },
 
     getScrollWidth: function () {
