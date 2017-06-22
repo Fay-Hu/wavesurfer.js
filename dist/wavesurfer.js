@@ -156,6 +156,7 @@ var WaveSurfer = {
         my.createPeakCache();
 
         my.isDestroyed = false;
+        my.lastClickPosition = progress;
         my.on ('ready', function () {
             my.audioIsReady = true;
             if (my.backend.lastClickPosition !== undefined) { my.seekTo(my.backend.lastClickPosition); }
@@ -1992,7 +1993,7 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
         this.canvases.forEach (function (canvas, canvasIndex) {
             // Add some overlap to prevent vertical white stripes; keep the width even for simplicity.
             if (canvasIndex != this.canvases.length - 1) {
-                var canvasWidth = this.maxCanvasWidth + (this.invertTransparency ? 0 : 2 * Math.ceil(this.params.pixelRatio / 2));
+                var canvasWidth = this.maxCanvasWidth + (this.params.invertTransparency ? 0 : 2 * Math.ceil(this.params.pixelRatio / 2));
             } else {
                 var canvasWidth = this.width - (this.maxCanvasWidth * (this.canvases.length - 1));
             }
