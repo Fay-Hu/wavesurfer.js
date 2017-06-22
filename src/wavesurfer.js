@@ -1,8 +1,3 @@
-/*! wavesurfer.js 1.4.0A (Monday, 19 Jun 2017)
-* https://github.com/katspaugh/wavesurfer.js
-* @license BSD-3-Clause
-*/
-
 'use strict';
 
 var WaveSurfer = {
@@ -13,7 +8,7 @@ var WaveSurfer = {
         backend       : 'WebAudio',
         barHeight     : 1,
         classList     : {},
-        styleList     : {cursor: {}},
+        styleList     : {wave: {}, progressWave: {}, cursor: {}},
         closeAudioContext: false,
         container     : null,
         cursorAlignment: 'middle',
@@ -46,69 +41,99 @@ var WaveSurfer = {
     init: function (params) {
         var my = this;
 
-        // Get defaults.
-        var temp = Object.assign ({}, this.defaultParams);
+        // Get defaults. We need this before setting the aliases so that
+        // we can refer to the properties when making the custom getters/setters.
+        var temp = Object.assign ({}, my.defaultParams);
 
         // Set aliases.
-        this.aliases = {};
-        this.aliases.cursorColor = {
+        var updateCursorPosition = function (n) { if (my.drawer) my.drawer.updateCursorPosition(); };
+        var drawBuffer = function () { if (my.drawer) my.drawBuffer(); };
+
+        my.aliases = {};
+        my.aliases.cursorColor = {
             target: {object: temp.styleList.cursor, property: '_backgroundColor'},
             sourceList: [
                 {object: temp, property: 'cursorColor'},
                 {object: temp.styleList.cursor, property: 'backgroundColor'}
             ]
         };
-        this.aliases.cursorWidth = {
+        my.aliases.cursorWidth = {
             target: {object: temp.styleList.cursor, property: '_width'},
             sourceList: [
-                {object: temp, property: 'cursorWidth', get: function (n) { return parseFloat(n); }, set: function (n) { return n + 'px'; }},
-                {object: temp.styleList.cursor, property: 'width'}
+                {object: temp, property: 'cursorWidth', get: function (n) { return parseFloat(n); }, set: function (n) { return n + 'px'; }, afterSet: updateCursorPosition},
+                {object: temp.styleList.cursor, property: 'width', afterSet: updateCursorPosition}
             ]
         };
-        WaveSurfer.util.refreshAliases (this.aliases);
+        my.aliases.cursorAlignment = {
+            target: {object: temp.styleList.cursor, property: '_cursorAlignment'},
+            sourceList: [{ object: temp, property: 'cursorAlignment', afterSet: updateCursorPosition }]
+        };
+        ['invertTransparency', 'backgroundColor', 'barWidth'].forEach(function (prop) {
+            my.aliases[prop] = {
+                target: {object: temp, property: '_' + prop},
+                sourceList: [{ object: temp, property: prop, afterSet: drawBuffer }]
+            };
+        });
+        ['wave', 'progressWave'].forEach(function (waveType) {
+            ['color', 'backgroundColor'].forEach(function (prop) {
+                var uniqueProp = (waveType == 'wave') ? 'wave' : 'progress';
+                var propCaps = prop[0].toUpperCase() + prop.slice(1)
+                my.aliases[waveType + propCaps] = {
+                    target: {object: temp.styleList[waveType], property: '_' + prop},
+                    sourceList: [
+                        {object: temp, property: uniqueProp + propCaps, afterSet: drawBuffer},
+                        {object: temp.styleList[waveType], property: prop, afterSet: drawBuffer}
+                    ]
+                };
+            });
+        });
+        WaveSurfer.util.refreshAliases(my.aliases);
+        
+        // Re-assign default parameters to populate the target properties defined in the aliases above.
+        var temp = Object.assign (temp, my.defaultParams);
 
         // Merge defaults and init parameters.
-        this.params = WaveSurfer.util.deepMerge(temp, params);
+        my.params = WaveSurfer.util.deepMerge(temp, params);
 
-        this.container = (typeof params.container == 'string') ?
-            document.querySelector(this.params.container) :
-            this.params.container;
+        my.container = (typeof params.container == 'string') ?
+            document.querySelector(my.params.container) :
+            my.params.container;
 
-        if (!this.container) {
+        if (!my.container) {
             throw new Error('Container element not found');
         }
 
-        if (this.params.mediaContainer == null) {
-            this.mediaContainer = this.container;
-        } else if (typeof this.params.mediaContainer == 'string') {
-            this.mediaContainer = document.querySelector(this.params.mediaContainer);
+        if (my.params.mediaContainer == null) {
+            my.mediaContainer = my.container;
+        } else if (typeof my.params.mediaContainer == 'string') {
+            my.mediaContainer = document.querySelector(my.params.mediaContainer);
         } else {
-            this.mediaContainer = this.params.mediaContainer;
+            my.mediaContainer = my.params.mediaContainer;
         }
 
-        if (!this.mediaContainer) {
+        if (!my.mediaContainer) {
             throw new Error('Media Container element not found');
         }
 
         // Used to save the current volume when muting so we can
         // restore once unmuted
-        this.savedVolume = 0;
+        my.savedVolume = 0;
 
         // The current muted state
-        this.isMuted = false;
+        my.isMuted = false;
 
         // Will hold a list of event descriptors that need to be
         // cancelled on subsequent loads of audio
-        this.tmpEvents = [];
+        my.tmpEvents = [];
 
         // Holds any running audio downloads
-        this.currentAjax = null;
+        my.currentAjax = null;
 
-        this.createDrawer();
-        this.createBackend();
-        this.createPeakCache();
+        my.createDrawer();
+        my.createBackend();
+        my.createPeakCache();
 
-        this.isDestroyed = false;
+        my.isDestroyed = false;
         my.on ('ready', function () {
             my.audioIsReady = true;
             if (my.backend.lastClickPosition !== undefined) { my.seekTo(my.backend.lastClickPosition); }
@@ -118,7 +143,7 @@ var WaveSurfer = {
     createDrawer: function () {
         var my = this;
         my.drawer = Object.create(WaveSurfer.Drawer[my.params.renderer]);
-        my.drawer.init(my.container, my.params, my.aliases);
+        my.drawer.init(my.container, my.params, my.aliases, my);
 
         my.drawer.on('redraw', function () {
             my.drawBuffer(function () { my.drawer.progress(my.backend.getPlayedPercents()); });
@@ -174,11 +199,20 @@ var WaveSurfer = {
     },
 
     getDuration: function () {
+        if (this.audioIsReady || this.cachedData === undefined || this.cachedData.duration === undefined) {
+            return this.backend.getDuration();
+        } else {
+            return this.cachedData.duration;
+        }
         return this.backend.getDuration();
     },
 
     getCurrentTime: function () {
-        return this.backend.getCurrentTime();
+        if (this.audioIsReady || this.cachedData === undefined || this.cachedData.duration === undefined) {
+            return this.backend.getCurrentTime();
+        } else {
+            return this.lastClickPosition * this.cachedData.duration;
+        }
     },
 
     play: function (start, end) {
@@ -345,7 +379,7 @@ var WaveSurfer = {
 
     getNumberOfChannels: function () {
       return this.backend.buffer ? this.backend.buffer.numberOfChannels :
-             this.backend.preload ? this.backend.preload.numberOfChannels :
+             (this.cachedData && this.cachedData.numberOfChannels !== undefined) ? this.cachedData.numberOfChannels :
             (this.backend.peaks[0] instanceof Array) ? this.backend.peaks.length : 2;
     },
 
@@ -389,7 +423,9 @@ var WaveSurfer = {
             end = subrangeLength - 1;
             var peaks = my.backend.getPeaks(subrangeLength, start, end);
         }
-        my.drawer.drawPeaks(peaks, width, start, end, function () { callback(); my.fireEvent('redraw', peaks, width);  });
+        my.drawer.drawPeaks(peaks, width, start, end, function () {
+            if (callback instanceof Function) callback(); my.fireEvent('redraw', peaks, width);
+        });
     },
 
     zoom: function (pxPerSec) {
@@ -397,11 +433,8 @@ var WaveSurfer = {
         this.params.scrollParent = true;
         var my = this;
         this.drawBuffer(function () {
-            var drawer = my.drawer
-            var progress = my.backend.getPlayedPercents();
-            if (progress === 0 && my.lastClickPosition != 0) progress = my.lastClickPosition;
-            drawer.updateProgress(drawer.width / my.params.pixelRatio * progress);
-            my.drawer.recenter(progress);
+            my.drawer.updateProgress();
+            my.drawer.recenter();
             my.fireEvent('zoom', pxPerSec);
         })
     },
@@ -451,8 +484,12 @@ var WaveSurfer = {
     /**
      * Loads audio and re-renders the waveform.
      */
-    load: function (url, peaks, preload, loadOnInteraction) {
+    load: function (url, peaks, preload, cachedData) {
         var my = this;
+        var cachedData = cachedData || {};
+        var loadOnInteraction = cachedData.loadOnInteraction;
+        if ('loadOnInteraction' in cachedData) { delete cachedData.loadOnInteraction; }
+        my.cachedData = cachedData;
         my.empty({drawPeaks: peaks === undefined}, function () {
             my.isMuted = false;
             switch (my.params.backend) {
