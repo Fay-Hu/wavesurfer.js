@@ -155,8 +155,9 @@ var WaveSurfer = {
         my.createBackend();
         my.createPeakCache();
 
+        my.lastClickPosition = 0;
+
         my.isDestroyed = false;
-        my.lastClickPosition = progress;
         my.on ('ready', function () {
             my.audioIsReady = true;
             if (my.backend.lastClickPosition !== undefined) { my.seekTo(my.backend.lastClickPosition); }
