@@ -133,6 +133,8 @@ var WaveSurfer = {
         my.createBackend();
         my.createPeakCache();
 
+        my.lastClickPosition = 0;
+
         my.isDestroyed = false;
         my.on ('ready', function () {
             my.audioIsReady = true;
