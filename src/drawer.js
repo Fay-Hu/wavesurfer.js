@@ -1,7 +1,8 @@
 'use strict';
 
 WaveSurfer.Drawer = {
-    init: function (container, params, aliases) {
+    init: function (container, params, aliases, wavesurfer) {
+        this.wavesurfer = wavesurfer;
         this.container = container;
         this.params = params;
         this.aliases = aliases;
@@ -132,12 +133,12 @@ WaveSurfer.Drawer = {
         }
     },
 
-    recenter: function (proportion) {
-        this.recenterOnPosition(proportion * this.getScrollWidth(), 1);
+    recenter: function (progress) {
+        if (progress === undefined) progress = this.getCurrentProgress();
+        this.recenterOnPosition(progress * this.getScrollWidth(), 1);
     },
 
     recenterOnPosition: function (position, scrollSpeed) {
-        scrollSpeed = .5;
         var newScroll = position - this.wrapper.clientWidth / 2;
         this.wrapper.scrollLeft = (this.wrapper.scrollLeft * (1 - scrollSpeed) + newScroll * scrollSpeed) || 0;
     },
@@ -213,7 +214,14 @@ WaveSurfer.Drawer = {
 
     clearCanvas: function () {},
 
-    updateProgress: function (position) {}
+    updateProgress: function (position) {},
+
+    updateCursorPosition: function (position) {},
+
+    getCurrentPosition: function () {},
+
+    getCurrentProgress: function () {}
+
 };
 
 WaveSurfer.util.extend(WaveSurfer.Drawer, WaveSurfer.Observer);
