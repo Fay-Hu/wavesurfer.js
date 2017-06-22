@@ -1,4 +1,4 @@
-/*! wavesurfer.js 1.4.0A (Monday, 19 Jun 2017)
+/*! wavesurfer.js 1.4.0A (June 22, 2017)
 * https://github.com/katspaugh/wavesurfer.js
 * @license BSD-3-Clause
 */
@@ -29,7 +29,7 @@ var WaveSurfer = {
         backend       : 'WebAudio',
         barHeight     : 1,
         classList     : {},
-        styleList     : {cursor: {}},
+        styleList     : {wave: {}, progressWave: {}, cursor: {}},
         closeAudioContext: false,
         container     : null,
         cursorAlignment: 'middle',
@@ -62,69 +62,99 @@ var WaveSurfer = {
     init: function (params) {
         var my = this;
 
-        // Get defaults.
-        var temp = Object.assign ({}, this.defaultParams);
+        // Get defaults. We need this before setting the aliases so that
+        // we can refer to the properties when making the custom getters/setters.
+        var temp = Object.assign ({}, my.defaultParams);
 
         // Set aliases.
-        this.aliases = {};
-        this.aliases.cursorColor = {
+        var updateCursorPosition = function (n) { if (my.drawer) my.drawer.updateCursorPosition(); };
+        var drawBuffer = function () { if (my.drawer) my.drawBuffer(); };
+
+        my.aliases = {};
+        my.aliases.cursorColor = {
             target: {object: temp.styleList.cursor, property: '_backgroundColor'},
             sourceList: [
                 {object: temp, property: 'cursorColor'},
                 {object: temp.styleList.cursor, property: 'backgroundColor'}
             ]
         };
-        this.aliases.cursorWidth = {
+        my.aliases.cursorWidth = {
             target: {object: temp.styleList.cursor, property: '_width'},
             sourceList: [
-                {object: temp, property: 'cursorWidth', get: function (n) { return parseFloat(n); }, set: function (n) { return n + 'px'; }},
-                {object: temp.styleList.cursor, property: 'width'}
+                {object: temp, property: 'cursorWidth', get: function (n) { return parseFloat(n); }, set: function (n) { return n + 'px'; }, afterSet: updateCursorPosition},
+                {object: temp.styleList.cursor, property: 'width', afterSet: updateCursorPosition}
             ]
         };
-        WaveSurfer.util.refreshAliases (this.aliases);
+        my.aliases.cursorAlignment = {
+            target: {object: temp.styleList.cursor, property: '_cursorAlignment'},
+            sourceList: [{ object: temp, property: 'cursorAlignment', afterSet: updateCursorPosition }]
+        };
+        ['invertTransparency', 'backgroundColor', 'barWidth'].forEach(function (prop) {
+            my.aliases[prop] = {
+                target: {object: temp, property: '_' + prop},
+                sourceList: [{ object: temp, property: prop, afterSet: drawBuffer }]
+            };
+        });
+        ['wave', 'progressWave'].forEach(function (waveType) {
+            ['color', 'backgroundColor'].forEach(function (prop) {
+                var uniqueProp = (waveType == 'wave') ? 'wave' : 'progress';
+                var propCaps = prop[0].toUpperCase() + prop.slice(1)
+                my.aliases[waveType + propCaps] = {
+                    target: {object: temp.styleList[waveType], property: '_' + prop},
+                    sourceList: [
+                        {object: temp, property: uniqueProp + propCaps, afterSet: drawBuffer},
+                        {object: temp.styleList[waveType], property: prop, afterSet: drawBuffer}
+                    ]
+                };
+            });
+        });
+        WaveSurfer.util.refreshAliases(my.aliases);
+        
+        // Re-assign default parameters to populate the target properties defined in the aliases above.
+        var temp = Object.assign (temp, my.defaultParams);
 
         // Merge defaults and init parameters.
-        this.params = WaveSurfer.util.deepMerge(temp, params);
+        my.params = WaveSurfer.util.deepMerge(temp, params);
 
-        this.container = (typeof params.container == 'string') ?
-            document.querySelector(this.params.container) :
-            this.params.container;
+        my.container = (typeof params.container == 'string') ?
+            document.querySelector(my.params.container) :
+            my.params.container;
 
-        if (!this.container) {
+        if (!my.container) {
             throw new Error('Container element not found');
         }
 
-        if (this.params.mediaContainer == null) {
-            this.mediaContainer = this.container;
-        } else if (typeof this.params.mediaContainer == 'string') {
-            this.mediaContainer = document.querySelector(this.params.mediaContainer);
+        if (my.params.mediaContainer == null) {
+            my.mediaContainer = my.container;
+        } else if (typeof my.params.mediaContainer == 'string') {
+            my.mediaContainer = document.querySelector(my.params.mediaContainer);
         } else {
-            this.mediaContainer = this.params.mediaContainer;
+            my.mediaContainer = my.params.mediaContainer;
         }
 
-        if (!this.mediaContainer) {
+        if (!my.mediaContainer) {
             throw new Error('Media Container element not found');
         }
 
         // Used to save the current volume when muting so we can
         // restore once unmuted
-        this.savedVolume = 0;
+        my.savedVolume = 0;
 
         // The current muted state
-        this.isMuted = false;
+        my.isMuted = false;
 
         // Will hold a list of event descriptors that need to be
         // cancelled on subsequent loads of audio
-        this.tmpEvents = [];
+        my.tmpEvents = [];
 
         // Holds any running audio downloads
-        this.currentAjax = null;
+        my.currentAjax = null;
 
-        this.createDrawer();
-        this.createBackend();
-        this.createPeakCache();
+        my.createDrawer();
+        my.createBackend();
+        my.createPeakCache();
 
-        this.isDestroyed = false;
+        my.isDestroyed = false;
         my.on ('ready', function () {
             my.audioIsReady = true;
             if (my.backend.lastClickPosition !== undefined) { my.seekTo(my.backend.lastClickPosition); }
@@ -134,7 +164,7 @@ var WaveSurfer = {
     createDrawer: function () {
         var my = this;
         my.drawer = Object.create(WaveSurfer.Drawer[my.params.renderer]);
-        my.drawer.init(my.container, my.params, my.aliases);
+        my.drawer.init(my.container, my.params, my.aliases, my);
 
         my.drawer.on('redraw', function () {
             my.drawBuffer(function () { my.drawer.progress(my.backend.getPlayedPercents()); });
@@ -190,11 +220,20 @@ var WaveSurfer = {
     },
 
     getDuration: function () {
+        if (this.audioIsReady || this.cachedData === undefined || this.cachedData.duration === undefined) {
+            return this.backend.getDuration();
+        } else {
+            return this.cachedData.duration;
+        }
         return this.backend.getDuration();
     },
 
     getCurrentTime: function () {
-        return this.backend.getCurrentTime();
+        if (this.audioIsReady || this.cachedData === undefined || this.cachedData.duration === undefined) {
+            return this.backend.getCurrentTime();
+        } else {
+            return this.lastClickPosition * this.cachedData.duration;
+        }
     },
 
     play: function (start, end) {
@@ -361,7 +400,7 @@ var WaveSurfer = {
 
     getNumberOfChannels: function () {
       return this.backend.buffer ? this.backend.buffer.numberOfChannels :
-             this.backend.preload ? this.backend.preload.numberOfChannels :
+             (this.cachedData && this.cachedData.numberOfChannels !== undefined) ? this.cachedData.numberOfChannels :
             (this.backend.peaks[0] instanceof Array) ? this.backend.peaks.length : 2;
     },
 
@@ -405,7 +444,9 @@ var WaveSurfer = {
             end = subrangeLength - 1;
             var peaks = my.backend.getPeaks(subrangeLength, start, end);
         }
-        my.drawer.drawPeaks(peaks, width, start, end, function () { callback(); my.fireEvent('redraw', peaks, width);  });
+        my.drawer.drawPeaks(peaks, width, start, end, function () {
+            if (callback instanceof Function) callback(); my.fireEvent('redraw', peaks, width);
+        });
     },
 
     zoom: function (pxPerSec) {
@@ -413,11 +454,8 @@ var WaveSurfer = {
         this.params.scrollParent = true;
         var my = this;
         this.drawBuffer(function () {
-            var drawer = my.drawer
-            var progress = my.backend.getPlayedPercents();
-            if (progress === 0 && my.lastClickPosition != 0) progress = my.lastClickPosition;
-            drawer.updateProgress(drawer.width / my.params.pixelRatio * progress);
-            my.drawer.recenter(progress);
+            my.drawer.updateProgress();
+            my.drawer.recenter();
             my.fireEvent('zoom', pxPerSec);
         })
     },
@@ -467,8 +505,12 @@ var WaveSurfer = {
     /**
      * Loads audio and re-renders the waveform.
      */
-    load: function (url, peaks, preload, loadOnInteraction) {
+    load: function (url, peaks, preload, cachedData) {
         var my = this;
+        var cachedData = cachedData || {};
+        var loadOnInteraction = cachedData.loadOnInteraction;
+        if ('loadOnInteraction' in cachedData) { delete cachedData.loadOnInteraction; }
+        my.cachedData = cachedData;
         my.empty({drawPeaks: peaks === undefined}, function () {
             my.isMuted = false;
             switch (my.params.backend) {
@@ -674,7 +716,7 @@ var WaveSurfer = {
         if (!('drawPeaks' in init) || (init.drawPeaks == true)) {
             this.drawer.drawPeaks({ length: this.drawer.getWidth() }, 0, undefined, undefined, callback);
         } else {
-            callback();
+            if (callback) callback();
         }
     },
 
@@ -749,8 +791,11 @@ WaveSurfer.util = {
     setAliases: function (init) {
         var targetObject = init.target.object, targetProperty = init.target.property;
         if (init.styleSource) {
-            var setExtra = function (n) { styleSourceObject[styleSourceProperty] = n; };
-            var styleSourceObject = init.styleSource.object, styleSourceProperty = init.styleSource.property;
+            var styleSource = init.styleSource;
+            var styleAfterSet = (styleSource.set)
+                ? function (n) { styleSourceObject[styleSourceProperty] = styleSource.set(n); }
+                : function (n) { styleSourceObject[styleSourceProperty] = n; };
+            var styleSourceObject = styleSource.object, styleSourceProperty = styleSource.property;
             var styleSourcePropertyUnderscore = styleSourceProperty.replace(/([A-Z])/g, '-$1').toLowerCase();
             Object.defineProperty(styleSourceObject, styleSourceProperty, {
                 get: function () { return this.getPropertyValue(styleSourcePropertyUnderscore); },
@@ -763,15 +808,21 @@ WaveSurfer.util = {
             } else {
                 var get = function () { return targetObject[targetProperty]; };
             }
+            var afterSet = source.afterSet;
+            if (styleAfterSet) {
+                var setExtra = (afterSet) ? function (n) { styleAfterSet(n); afterSet(n); } : styleAfterSet;
+            } else {
+                var setExtra = (afterSet) ? afterSet : undefined;
+            }
             if (source.set) {
                 if (setExtra) {
-                    var set = function (value) { setExtra(value); targetObject[targetProperty] = source.set(value); };
+                    var set = function (value) { value = targetObject[targetProperty] = source.set(value); setExtra(value); };
                 } else {
                     var set = function (value) { targetObject[targetProperty] = source.set(value); };
                 }
             } else {
                 if (setExtra) {
-                    var set = function (value) { setExtra(value); targetObject[targetProperty] = value; };
+                    var set = function (value) { value = targetObject[targetProperty] = value; setExtra(value); };
                 } else {
                     var set = function (value) { targetObject[targetProperty] = value; };
                 }
@@ -1647,7 +1698,8 @@ WaveSurfer.AudioElement = WaveSurfer.MediaElement;
 'use strict';
 
 WaveSurfer.Drawer = {
-    init: function (container, params, aliases) {
+    init: function (container, params, aliases, wavesurfer) {
+        this.wavesurfer = wavesurfer;
         this.container = container;
         this.params = params;
         this.aliases = aliases;
@@ -1744,7 +1796,7 @@ WaveSurfer.Drawer = {
         my.clearCanvas();
 
         if (peaks instanceof Function) { peaks(inner); } else { inner(peaks, length, start, end); }
-        callback();
+        if (callback) callback();
         
         function inner (peaks, length, start, end) {
             // Run the draw function if there are no channels to split. Otherwise, split the channels.
@@ -1778,12 +1830,12 @@ WaveSurfer.Drawer = {
         }
     },
 
-    recenter: function (proportion) {
-        this.recenterOnPosition(proportion * this.getScrollWidth(), 1);
+    recenter: function (progress) {
+        if (progress === undefined) progress = this.getCurrentProgress();
+        this.recenterOnPosition(progress * this.getScrollWidth(), 1);
     },
 
     recenterOnPosition: function (position, scrollSpeed) {
-        scrollSpeed = .5;
         var newScroll = position - this.wrapper.clientWidth / 2;
         this.wrapper.scrollLeft = (this.wrapper.scrollLeft * (1 - scrollSpeed) + newScroll * scrollSpeed) || 0;
     },
@@ -1859,7 +1911,14 @@ WaveSurfer.Drawer = {
 
     clearCanvas: function () {},
 
-    updateProgress: function (position) {}
+    updateProgress: function (position) {},
+
+    updateCursorPosition: function (position) {},
+
+    getCurrentPosition: function () {},
+
+    getCurrentProgress: function () {}
+
 };
 
 WaveSurfer.util.extend(WaveSurfer.Drawer, WaveSurfer.Observer);
@@ -1914,9 +1973,9 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
                 display: 'none'
             }))
         );
-        WaveSurfer.util.refreshAliases (this.aliases, {
+        WaveSurfer.util.refreshAliases(this.aliases, {
             cursorColor: { styleSource: {object: this.cursor.style, property: 'backgroundColor'} },
-            cursorWidth: { styleSource: {object: this.cursor.style, property: 'width'} },
+            cursorWidth: { styleSource: {object: this.cursor.style, property: 'width'}, get: function (n) { return parseFloat(n); }, set: function (n) { return n + 'px'; }},
         });
         if (params.classList.cursor) { this.cursor.classList.add(params.classList.cursor); }
         this.addCanvas();
@@ -2023,6 +2082,7 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
         }
 
         var scale = length / this.width;
+        this.fillRect(0, 0, this.width, height, 'background');
 
         for (var i = (start / scale); i < (end / scale); i += step) {
             var peak = peaks[Math.floor(i * scale * peakIndexScale)] || 0;
@@ -2057,6 +2117,9 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
             var min = WaveSurfer.util.min(peaks);
             var absmax = -min > max ? -min : max;
         }
+
+        this.fillRect(0, 0, this.width, height, 'background');
+
         this.drawLine(peaks, absmax, halfH, offsetY, start, end);
 
         // Always draw a median line.
@@ -2127,14 +2190,13 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
         ctx.fill();
     },
 
-    fillRect: function (x, y, width, height) {
+    fillRect: function (x, y, width, height, fillLayer) {
+        var fillLayer = (fillLayer === undefined) ? 'foreground' : fillLayer;
         var startCanvas = Math.floor(x / this.maxCanvasWidth);
         var endCanvas   = Math.min(Math.ceil((x + width) / this.maxCanvasWidth) + 1, this.canvases.length);
-
         for (var i = startCanvas; i < endCanvas; i++) {
             var canvas = this.canvases[i];
             var leftOffset = i * this.maxCanvasWidth;
-
             var intersection = {
                 x1: Math.max(x, i * this.maxCanvasWidth),
                 y1: y,
@@ -2143,8 +2205,14 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
             };
 
             if (intersection.x1 < intersection.x2) {
-                this.setFillStyles(canvas);
                 ['wave'].concat(canvas.progressWaveCtx ? ['progressWave'] : []).forEach (function (waveType) {
+                    var uniqueProp = (waveType == 'wave') ? 'wave' : 'progress';
+                    if ((fillLayer == 'background') &&
+                        (this.params[uniqueProp + 'BackgroundColor'] === undefined) &&
+                        (this.params.backgroundColor === undefined)) {
+                        return;
+                    }
+                    this.setFillStyles(canvas, waveType, fillLayer);
                     this.fillRectToContext(canvas[waveType + 'Ctx'],
                         intersection.x1 - leftOffset,
                         intersection.y1,
@@ -2159,23 +2227,64 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
         if (ctx) { ctx.fillRect(x, y, width, height); }
     },
 
-    setFillStyles: function (canvas) {
-        if (this.invertTransparency) { var cutColor = ('cutColor' in this.invertTransparency) ? this.invertTransparency.cutColor : '#fefefe'; }
-        canvas.waveCtx.fillStyle = this.invertTransparency ? cutColor : this.params.waveColor;
-        if (canvas.progressWaveCtx) { canvas.progressWaveCtx.fillStyle = this.invertTransparency ? cutColor : this.params.progressColor; }
+    setFillStyles: function (canvas, waveType, fillLayer) {
+        var fillLayer = (fillLayer === undefined) ? 'foreground' : fillLayer;
+        var params = this.params;
+        if (fillLayer == 'foreground') {
+            if (params.invertTransparency) {
+                var cutColor = (params.invertTransparency === 'object' && 'cutColor' in params.invertTransparency)
+                    ? params.invertTransparency.cutColor
+                    : '#fefefe';
+            }
+            if (waveType === undefined || waveType == 'wave') {
+                canvas.waveCtx.fillStyle = params.invertTransparency ? cutColor : params.waveColor;
+            }
+            if ((waveType === undefined || waveType == 'progressWave') && canvas.progressWaveCtx) {
+                canvas.progressWaveCtx.fillStyle = params.invertTransparency ? cutColor : params.progressColor;
+            }
+        } else {
+            if (waveType === undefined || waveType == 'wave') {
+                canvas.waveCtx.fillStyle = (params.waveBackgroundColor !== undefined)
+                    ? params.waveBackgroundColor
+                    : params.backgroundColor;
+            }
+            if ((waveType === undefined || waveType == 'progressWave') && canvas.progressWaveCtx) {
+                canvas.progressWaveCtx.fillStyle = (params.progressBackgroundColor !== undefined)
+                    ? params.progressBackgroundColor
+                    : params.backgroundColor;
+            }
+        }
     },
 
     updateProgress: function (pos) {
+        if (pos === undefined) pos = this.getCurrentPosition();
         var totalWidth = this.width / this.params.pixelRatio;
         this.style(this.wave, { left: pos + 'px', width: (totalWidth - pos) + 'px' });
         this.canvases.forEach (function (canvas, i) {
             this.style(canvas.wave, { marginLeft: -pos + 'px' });
         }, this);
+        this.updateCursorPosition(pos);
+        if (this.progressWave) { this.style(this.progressWave, { width: pos + 'px' }); }
+    },
+
+    updateCursorPosition: function (pos) {
+        if (pos === undefined) pos = this.getCurrentPosition();
         var cursorPos = pos - ((this.params.cursorAlignment == 'right') ? 0
             : (this.params.cursorAlignment == 'middle') ? (this.params.cursorWidth / 2)
             : this.params.cursorWidth);
         this.style(this.cursor, { left: cursorPos + 'px' });
-        if (this.progressWave) { this.style(this.progressWave, { width: pos + 'px' }); }
+    },
+
+    getCurrentPosition: function () {
+        var progress = this.wavesurfer.backend.getPlayedPercents();
+        if (progress === 0 && this.wavesurfer.lastClickPosition != 0) progress = this.wavesurfer.lastClickPosition;
+        return this.width / this.wavesurfer.params.pixelRatio * progress;
+    },
+
+    getCurrentProgress: function () {
+        var progress = this.wavesurfer.backend.getPlayedPercents();
+        if (progress === 0 && this.wavesurfer.lastClickPosition != 0) progress = this.wavesurfer.lastClickPosition;
+        return progress;
     },
 
     getScrollWidth: function () {
