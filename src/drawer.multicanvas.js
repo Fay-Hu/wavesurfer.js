@@ -37,11 +37,22 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
             if (params.classList[waveType]) { this[waveType].classList.add(params.classList[waveType]); }
             if (waveType == 'progressWave') { this[waveType].style.display = 'none'; }
         }, this);
-        this.cursor = this.wrapper.appendChild(
+        // We need a cursor wrapper in the case that the cursor overflows the wave and creates an unnecessary scroll bar.
+        this.cursorWrapper = this.wrapper.appendChild(
+            this.style(document.createElement('div'), {
+                overflow: 'hidden',
+                position: 'absolute',
+                zIndex: 2,
+                height: '100%',
+                width: '100%',
+                left: 0,
+                display: 'block'
+            })
+        );
+        this.cursor = this.cursorWrapper.appendChild(
             this.style(document.createElement('div'), Object.assign({}, params.styleList.cursor, {
                 backgroundColor: params.cursorColor,
                 position: 'absolute',
-                zIndex: 2,
                 width: params.cursorWidth + 'px',
                 height: '100%',
                 left: 0,
