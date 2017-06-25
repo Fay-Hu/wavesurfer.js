@@ -24,40 +24,41 @@
 
 var WaveSurfer = {
     defaultParams: {
-        audioContext  : null,
-        audioRate     : 1,
-        autoCenter    : true,
-        backend       : 'WebAudio',
-        barHeight     : 1,
-        classList     : {},
-        styleList     : {wave: {}, progressWave: {}, cursor: {}},
-        closeAudioContext: false,
-        container     : null,
-        cursorAlignment: 'middle',
-        cursorColor   : '#333',
-        cursorWidth   : 1,
-        dragSelection : true,
-        fillColor     : undefined,
-        fillParent    : true,
-        forceDecode   : false,
-        height        : 128,
-        hideScrollbar : false,
-        interact      : true,
-        invertTransparency: false,
-        loopSelection : true,
-        mediaContainer: null,
-        mediaControls : false,
-        mediaType     : 'audio',
-        minPxPerSec   : 20,
-        partialRender : false,
-        pixelRatio    : window.devicePixelRatio || screen.deviceXDPI / screen.logicalXDPI,
-        progressColor : '#555',
-        normalize     : false,
-        renderer      : 'MultiCanvas',
-        scrollParent  : false,
-        skipLength    : 2,
-        splitChannels : false,
-        waveColor     : '#999',
+        audioContext       : null,
+        audioRate          : 1,
+        autoCenter         : true,
+        autoVisualRange    : undefined,
+        backend            : 'WebAudio',
+        barHeight          : 1,
+        classList          : {},
+        styleList          : {wave: {}, progressWave: {}, cursor: {}},
+        closeAudioContext  : false,
+        container          : null,
+        cursorAlignment    : 'middle',
+        cursorColor        : '#333',
+        cursorWidth        : 1,
+        dragSelection      : true,
+        fillColor          : undefined,
+        fillParent         : true,
+        forceDecode        : false,
+        height             : 128,
+        hideScrollbar      : false,
+        interact           : true,
+        invertTransparency : false,
+        loopSelection      : true,
+        mediaContainer     : null,
+        mediaControls      : false,
+        mediaType          : 'audio',
+        minPxPerSec        : 20,
+        partialRender      : false,
+        pixelRatio         : window.devicePixelRatio || screen.deviceXDPI / screen.logicalXDPI,
+        progressColor      : '#555',
+        normalize          : false,
+        renderer           : 'MultiCanvas',
+        scrollParent       : false,
+        skipLength         : 2,
+        splitChannels      : false,
+        waveColor          : '#999',
     },
 
     init: function (params) {
@@ -161,7 +162,7 @@ var WaveSurfer = {
 
         my.on ('ready', function () {
             my.audioIsReady = true;
-            if (my.backend.lastClickPosition !== undefined) { my.seekTo(my.backend.lastClickPosition); }
+            if (my.lastClickPosition !== undefined) { my.seekTo(my.lastClickPosition); }
         });
     },
 
@@ -179,7 +180,7 @@ var WaveSurfer = {
             setTimeout(function () { my.seekTo(progress); }, 0);
         });
 
-        // Relay the scroll event from the drawer
+        // Relay the scroll event from the drawer.
         my.drawer.on('scroll', function (e) {
             if (my.params.partialRender) {
                 my.drawBuffer(function () {my.fireEvent('scroll', e); });
@@ -412,7 +413,8 @@ var WaveSurfer = {
         var nominalWidth = Math.round(this.getDuration() * this.params.minPxPerSec * this.params.pixelRatio);
         var parentWidth = this.drawer.getWidth();
 
-        // Fill container.
+        // If we should fill the container, and scrollParent is false or nominalWidth < parentWidth,
+        // then make sure width is at least equal to parentWidth.
         if (this.params.fillParent && (!this.params.scrollParent || nominalWidth < parentWidth)) {
             var width = parentWidth;
             var start = 0;
@@ -425,39 +427,47 @@ var WaveSurfer = {
         return { width: width, start: start, end: end };
     },
 
+    getPxPerSec: function () { return this.getComputedWidthAndRange().width / (this.getDuration() * this.params.pixelRatio); },
+
     drawBuffer: function (callback) {
         var wse = this.getComputedWidthAndRange();
         var width = wse.width, start = wse.start, end = wse.end;
         var my = this;
+
+        if ('peaks' in my.backend) {
+           var numberOfChannels = my.getNumberOfChannels();
+           var subrangeLength = ((my.backend.peaks[0] instanceof Array) ? my.backend.peaks[0].length : my.backend.peaks.length) / numberOfChannels;
+        } else {
+           var subrangeLength = width;
+        }
+
         if (my.params.partialRender) {
-            var newRanges = my.peakCache.addRangeToPeakCache(width, start, end);
+            // These are incorrect values for partialRender...
+            start = Math.round((start + 1) / width * subrangeLength) - 1;
+            end   = Math.round((end + 1) / width * subrangeLength) - 1;
+            var newRanges = my.peakCache.addRangeToPeakCache(subrangeLength, start, end);
             var peaks = function (inner) {
                 for (var i = 0; i < newRanges.length; i++) {
-                    var peaks = my.backend.getPeaks(width, newRanges[i][0], newRanges[i][1]);
+                    var peaks = my.backend.getPeaks(subrangeLength, newRanges[i][0], newRanges[i][1]);
                     inner(peaks, width, newRanges[i][0], newRanges[i][1]);
                 }
             }
         } else {
-            if (!('peaks' in my.backend)) {
-                var subrangeLength = width;
-            } else {
-                var numberOfChannels = my.getNumberOfChannels();
-                var subrangeLength = ((my.backend.peaks[0] instanceof Array) ? my.backend.peaks[0].length : my.backend.peaks.length) / numberOfChannels;
-            }
-            start = 0;
-            end = subrangeLength - 1;
+            start = 0; end = subrangeLength - 1;
             var peaks = my.backend.getPeaks(subrangeLength, start, end);
         }
-        my.drawer.drawPeaks(peaks, width, start, end, function () {
+
+        my.drawer.drawPeaks(peaks, width, start, end, !my.params.partialRender, function () {
             if (callback instanceof Function) callback(); my.fireEvent('redraw', peaks, width);
         });
     },
 
     zoom: function (pxPerSec) {
-        this.params.minPxPerSec = pxPerSec;
-        this.params.scrollParent = true;
         var my = this;
-        this.drawBuffer(function () {
+        if (my.params.partialRender && my.peakCache) my.peakCache.clearPeakCache()
+        my.params.minPxPerSec = pxPerSec;
+        my.params.scrollParent = true;
+        my.drawBuffer(function () {
             my.drawer.updateProgress();
             my.drawer.recenter();
             my.fireEvent('zoom', pxPerSec);
@@ -1791,13 +1801,13 @@ WaveSurfer.Drawer = {
         });
     },
 
-    drawPeaks: WaveSurfer.util.frame(function (peaks, length, start, end, callback) {
+    drawPeaks: WaveSurfer.util.frame(function (peaks, length, start, end, clearCanvas, callback) {
         var my = this;
 
         my.setWidth(length);
 
         // Clear the canvas.
-        my.clearCanvas();
+        if (clearCanvas === undefined || clearCanvas === true) my.clearCanvas();
 
         if (peaks instanceof Function) { peaks(inner); } else { inner(peaks, length, start, end); }
         if (callback) callback();
@@ -1885,12 +1895,23 @@ WaveSurfer.Drawer = {
     progress: function (progress) {
         var minPxDelta = 1 / this.params.pixelRatio;
         var pos = Math.round(progress * this.width) * minPxDelta;
-
+        
         if (pos < this.lastPos || pos - this.lastPos >= minPxDelta) {
-            this.lastPos = pos
-            if (this.params.scrollParent && this.params.autoCenter) {
-                var newPos = ~~(this.getScrollWidth() * progress);
-                this.recenterOnPosition(newPos, .8);
+            this.lastPos = pos;
+            if (this.params.scrollParent && (this.params.autoCenter || this.params.autoVisualRange)) {
+                if (this.params.autoVisualRange === undefined) {
+                    pos = ~~(this.getScrollWidth() * progress);
+                    this.recenterOnPosition(pos, 1);
+                } else {
+                    var fullWidth = this.getWidth(), adj = undefined
+                    var cursorVisualOffset = (pos - this.wrapper.scrollLeft) / fullWidth;
+                    if (cursorVisualOffset <= this.params.autoVisualRange[0]) {
+                        adj = 0;
+                    } else if (cursorVisualOffset >= this.params.autoVisualRange[1]) {
+                        adj = 1;
+                    }
+                    if (adj !== undefined) this.wrapper.scrollLeft = pos - this.params.autoVisualRange[adj] * fullWidth;
+                }
             }
          }
          this.updateProgress(pos);
@@ -1973,7 +1994,6 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
                 position: 'absolute',
                 zIndex: 2,
                 height: '100%',
-                width: '100%',
                 left: 0,
                 display: 'block',
                 pointerEvents: 'none'
@@ -2048,7 +2068,6 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
 
         canvas.waveCtx.canvas.width = width;
         canvas.waveCtx.canvas.height = height;
-
         this.style(this.wave, {height: height / this.params.pixelRatio + 'px'});
         this.style(canvas.waveCtx.canvas, {width: elementWidth + 'px'});
         this.style(this.cursor, {display: 'block'});
@@ -2274,7 +2293,9 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
 
     updateProgress: function (pos) {
         if (pos === undefined) pos = this.getCurrentPosition();
+
         var totalWidth = this.width / this.params.pixelRatio;
+        this.style(this.cursorWrapper, {width: totalWidth + 'px'});
         this.style(this.wave, { left: pos + 'px', width: (totalWidth - pos) + 'px' });
         this.canvases.forEach (function (canvas, i) {
             this.style(canvas.wave, { marginLeft: -pos + 'px' });
@@ -2772,12 +2793,12 @@ WaveSurfer.PeakCache = {
     },
 
     clearPeakCache: function() {
-	// Flat array with entries that are always in pairs to mark the
-	// beginning and end of each subrange.  This is a convenience so we can
-	// iterate over the pairs for easy set difference operations.
+	       // Flat array with entries that are always in pairs to mark the
+	       // beginning and end of each subrange.  This is a convenience so we can
+	       // iterate over the pairs for easy set difference operations.
         this.peakCacheRanges = [];
-	// Length of the entire cachable region, used for resetting the cache
-	// when this changes (zoom events, for instance).
+	       // Length of the entire cachable region, used for resetting the cache
+	       // when this changes (zoom events, for instance).
         this.peakCacheLength = -1;
     },
 
@@ -2794,10 +2815,10 @@ WaveSurfer.PeakCache = {
         while (i < this.peakCacheRanges.length && this.peakCacheRanges[i] < start) {
             i++;
         }
-	// If |i| is even, |start| falls after an existing range.  Otherwise,
-	// |start| falls between an existing range, and the uncached region
-	// starts when we encounter the next node in |peakCacheRanges| or
-	// |end|, whichever comes first.
+	       // If |i| is even, |start| falls after an existing range.  Otherwise,
+	       // |start| falls between an existing range, and the uncached region
+	       // starts when we encounter the next node in |peakCacheRanges| or
+	       // |end|, whichever comes first.
         if (i % 2 == 0) {
             uncachedRanges.push(start);
         }
@@ -2806,9 +2827,7 @@ WaveSurfer.PeakCache = {
             i++;
         }
         // If |i| is even, |end| is after all existing ranges.
-        if (i % 2 == 0) {
-            uncachedRanges.push(end);
-        }
+        if (i % 2 == 0) { uncachedRanges.push(end); }
 
         // Filter out the 0-length ranges.
         uncachedRanges = uncachedRanges.filter(function(item, pos, arr) {
@@ -2821,9 +2840,9 @@ WaveSurfer.PeakCache = {
             }
         });
 
-	// Merge the two ranges together, uncachedRanges will either contain
-	// wholly new points, or duplicates of points in peakCacheRanges.  If
-	// duplicates are detected, remove both and extend the range.
+	       // Merge the two ranges together. uncachedRanges will either contain
+	       // wholly new points, or duplicates of points in peakCacheRanges.  If
+	       // duplicates are detected, remove both and extend the range.
         this.peakCacheRanges = this.peakCacheRanges.concat(uncachedRanges);
         this.peakCacheRanges = this.peakCacheRanges.sort(function(a, b) {
             return a - b;
@@ -2837,8 +2856,8 @@ WaveSurfer.PeakCache = {
             }
         });
 
-	// Push the uncached ranges into an array of arrays for ease of
-	// iteration in the functions that call this.
+	       // Push the uncached ranges into an array of arrays for ease of
+	       // iteration in the functions that call this.
         var uncachedRangePairs = [];
         for (i = 0; i < uncachedRanges.length; i += 2) {
             uncachedRangePairs.push([uncachedRanges[i], uncachedRanges[i+1]]);
@@ -2847,7 +2866,7 @@ WaveSurfer.PeakCache = {
         return uncachedRangePairs;
     },
 
-    // For testing
+    // For testing.
     getCacheRanges: function() {
       var peakCacheRangePairs = [];
       for (var i = 0; i < this.peakCacheRanges.length; i += 2) {
