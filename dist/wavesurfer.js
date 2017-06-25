@@ -160,10 +160,17 @@ var WaveSurfer = {
 
         my.isDestroyed = false;
 
-        my.on ('ready', function () {
+        my.on('ready', function () {
             my.audioIsReady = true;
             if (my.lastClickPosition !== undefined) { my.seekTo(my.lastClickPosition); }
         });
+        my.on('scroll', function (evt, func) {
+            var drawer = my.drawer;
+            if (!drawer || !drawer.params.autoVisualRange) { return; }
+            if (drawer.lastScrollWasProgrammatic) { drawer.lastScrollWasProgrammatic = false; return; }
+            
+            drawer.setPositionLockFromCursorAndScrollPosition ()
+         });
     },
 
     createDrawer: function () {
@@ -301,7 +308,8 @@ var WaveSurfer = {
         var oldScrollParent = this.params.scrollParent;
         this.params.scrollParent = false;
         this.backend.seekTo(progress * this.getDuration());
-        this.drawer.progress(progress);
+        console.log (311)
+        this.drawer.progress(progress, true);
 
         if (!paused) { this.backend.play(); }
         this.params.scrollParent = oldScrollParent;
@@ -469,7 +477,8 @@ var WaveSurfer = {
         my.params.scrollParent = true;
         my.drawBuffer(function () {
             my.drawer.updateProgress();
-            my.drawer.recenter();
+            console.log (my.drawer.relativePositionLock)
+            my.drawer.lockOnPosition (my.drawer.getCurrentProgress() * my.drawer.getScrollWidth(), 1, my.drawer.relativePositionLock)
             my.fireEvent('zoom', pxPerSec);
         })
     },
@@ -519,17 +528,22 @@ var WaveSurfer = {
     /**
      * Loads audio and re-renders the waveform.
      */
-    load: function (url, peaks, preload, cachedData) {
+    load: function (url, peaks, preload, settings) {
         var my = this;
-        var cachedData = cachedData || {};
-        var loadOnInteraction = cachedData.loadOnInteraction;
-        if ('loadOnInteraction' in cachedData) { delete cachedData.loadOnInteraction; }
-        my.cachedData = cachedData;
+        var settings = settings || {};
+        var loadOnInteraction      = settings.loadOnInteraction;
+        var createHTMLAudioElement = settings.createHTMLAudioElement;
+        ['loadOnInteraction', 'createHTMLAudioElement'].forEach(function (prop) {
+            if (prop in settings) delete settings[prop];
+        });
+        my.cachedData = settings;
         my.empty({drawPeaks: peaks === undefined}, function () {
             my.isMuted = false;
             switch (my.params.backend) {
                 case 'WebAudio': return my.loadBuffer(url, peaks, true, loadOnInteraction);
-                case 'MediaElement': return my.loadMediaElement(url, peaks, preload);
+                case 'MediaElement':
+                    if (createHTMLAudioElement) { url = new Audio(url); }
+                    return my.loadMediaElement(url, peaks, preload);
             }
         });
     },
@@ -586,11 +600,25 @@ var WaveSurfer = {
             url = elt.src;
         }
 
-        this.tmpEvents.push(
-            this.backend.once('canplay', (function () {
-                var my = this; my.drawBuffer(function () { my.fireEvent('ready'); });
-            }).bind(this)),
+        if (peaks) {
+            var canvasIsReady = false, audioIsReady = false, readyPlayed = false, my = this;
+            my.drawBuffer(function () {
+                canvasIsReady = true; if (audioIsReady && !readyPlayed) { readyPlayed = true; my.fireEvent('ready');}
+            });
+            this.tmpEvents.push(
+                this.backend.once('canplay', (function () {
+                    var my = this; audioIsReady = true; if (canvasIsReady && !readyPlayed) { readyPlayed = true; my.fireEvent('ready'); }
+                }).bind(this))
+            );
+        } else {
+            this.tmpEvents.push(
+                this.backend.once('canplay', (function () {
+                    var my = this; my.drawBuffer(function () { my.fireEvent('ready'); });
+                }).bind(this))
+            );
+        }
 
+        this.tmpEvents.push(
             this.backend.once('error', (function (err) {
                 this.fireEvent('error', err);
             }).bind(this))
@@ -949,9 +977,7 @@ WaveSurfer.Observer = {
         if (!this.handlers) { this.handlers = {}; }
 
         var handlers = this.handlers[event];
-        if (!handlers) {
-            handlers = this.handlers[event] = [];
-        }
+        if (!handlers) { handlers = this.handlers[event] = []; }
         handlers.push(fn);
 
         // Return an event descriptor
@@ -1351,7 +1377,7 @@ WaveSurfer.WebAudio = {
 
         this.startPosition = start;
         this.lastPlay = this.ac.currentTime;
-
+        
         if (this.state === this.states[this.FINISHED_STATE]) {
             this.setState(this.PAUSED_STATE);
         }
@@ -1720,8 +1746,8 @@ WaveSurfer.Drawer = {
 
         this.width = 0;
         this.height = params.height * this.params.pixelRatio;
-
         this.lastPos = 0;
+        this.relativePositionLock = .5;
 
         this.initDrawer(params);
         this.createWrapper();
@@ -1841,6 +1867,7 @@ WaveSurfer.Drawer = {
     resetScroll: function () {
         if (this.wrapper !== null) {
             this.wrapper.scrollLeft = 0;
+            this.lastScrollWasProgrammatic = true;
         }
     },
 
@@ -1849,9 +1876,22 @@ WaveSurfer.Drawer = {
         this.recenterOnPosition(progress * this.getScrollWidth(), 1);
     },
 
-    recenterOnPosition: function (position, scrollSpeed) {
-        var newScroll = position - this.wrapper.clientWidth / 2;
+    recenterOnPosition: function (position, scrollSpeed) { this.lockOnPosition(position, scrollSpeed, .5); },
+    
+    lockOnPosition: function (position, scrollSpeed, relativePosition) {
+        var relativePosition = relativePosition === undefined ? .5 : relativePosition;
+        var newScroll = position - relativePosition * this.getWidth();
         this.wrapper.scrollLeft = (this.wrapper.scrollLeft * (1 - scrollSpeed) + newScroll * scrollSpeed) || 0;
+        this.lastScrollWasProgrammatic = true;
+    },
+    
+    setPositionLockFromCursorAndScrollPosition: function (pos) {
+        if (pos === undefined) pos = this.lastPos;
+        var fullWidth = this.getWidth(), adj = undefined;
+        var offset = (pos - this.wrapper.scrollLeft) / fullWidth;
+        var adj = (offset <= this.params.autoVisualRange[0]) ? 0 : ((offset >= this.params.autoVisualRange[1]) ? 1 : undefined)
+        if (adj !== undefined) offset = this.params.autoVisualRange[adj];
+        this.relativePositionLock = offset;
     },
 
     getScrollX: function() {
@@ -1892,26 +1932,17 @@ WaveSurfer.Drawer = {
         this.updateSize();
     },
 
-    progress: function (progress) {
+    progress: function (progress, fromSeekTo) {
         var minPxDelta = 1 / this.params.pixelRatio;
         var pos = Math.round(progress * this.width) * minPxDelta;
-        
+        if (this.params.autoVisualRange && fromSeekTo === true) this.setPositionLockFromCursorAndScrollPosition(pos);
         if (pos < this.lastPos || pos - this.lastPos >= minPxDelta) {
             this.lastPos = pos;
             if (this.params.scrollParent && (this.params.autoCenter || this.params.autoVisualRange)) {
-                if (this.params.autoVisualRange === undefined) {
-                    pos = ~~(this.getScrollWidth() * progress);
-                    this.recenterOnPosition(pos, 1);
-                } else {
-                    var fullWidth = this.getWidth(), adj = undefined
-                    var cursorVisualOffset = (pos - this.wrapper.scrollLeft) / fullWidth;
-                    if (cursorVisualOffset <= this.params.autoVisualRange[0]) {
-                        adj = 0;
-                    } else if (cursorVisualOffset >= this.params.autoVisualRange[1]) {
-                        adj = 1;
-                    }
-                    if (adj !== undefined) this.wrapper.scrollLeft = pos - this.params.autoVisualRange[adj] * fullWidth;
-                }
+            console.log (this.params.autoVisualRange, fromSeekTo)
+                console.log (this.relativePositionLock)
+                pos = ~~(this.getScrollWidth() * progress);
+                this.lockOnPosition(pos, 1, this.relativePositionLock);
             }
          }
          this.updateProgress(pos);
@@ -2020,6 +2051,9 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
     updateSize: function () {
         var totalWidth = Math.round(this.width / this.params.pixelRatio);
         var requiredCanvases = Math.ceil(totalWidth / this.maxCanvasElementWidth);
+        var pos = this.getCurrentPosition();
+        this.style(this.cursorWrapper, {width: totalWidth + 'px'});
+        this.style(this.wave, { width: (totalWidth - pos) + 'px' });
 
         while (this.canvases.length < requiredCanvases) { this.addCanvas(); }
         while (this.canvases.length > requiredCanvases) { this.removeCanvas(); }
@@ -2200,6 +2234,7 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
 
         var first = Math.round(length * canvas.start);
         var last = Math.round(length * canvas.end) + 1;
+
         if (first > end || last < start) { return; }
 
         var canvasStart = Math.max(first, start);
@@ -2295,7 +2330,6 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
         if (pos === undefined) pos = this.getCurrentPosition();
 
         var totalWidth = this.width / this.params.pixelRatio;
-        this.style(this.cursorWrapper, {width: totalWidth + 'px'});
         this.style(this.wave, { left: pos + 'px', width: (totalWidth - pos) + 'px' });
         this.canvases.forEach (function (canvas, i) {
             this.style(canvas.wave, { marginLeft: -pos + 'px' });
