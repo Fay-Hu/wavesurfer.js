@@ -1,4 +1,4 @@
-/*! wavesurfer.js 1.4.0A (June 24, 2017)
+/*! wavesurfer.js 1.4.0A (June 25, 2017)
 * https://github.com/katspaugh/wavesurfer.js
 * (modifications) https://github.com/agamemnus/wavesurfer.js
 * @license BSD-3-Clause
@@ -1975,7 +1975,8 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
                 height: '100%',
                 width: '100%',
                 left: 0,
-                display: 'block'
+                display: 'block',
+                pointerEvents: 'none'
             })
         );
         this.cursor = this.cursorWrapper.appendChild(
