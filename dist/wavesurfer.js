@@ -1,4 +1,4 @@
-/*! wavesurfer.js 1.4.0A (June 25, 2017)
+/*! wavesurfer.js 1.4.0A (July 13, 2017)
 * https://github.com/katspaugh/wavesurfer.js
 * (modifications) https://github.com/agamemnus/wavesurfer.js
 * @license BSD-3-Clause
@@ -308,7 +308,6 @@ var WaveSurfer = {
         var oldScrollParent = this.params.scrollParent;
         this.params.scrollParent = false;
         this.backend.seekTo(progress * this.getDuration());
-        console.log (311)
         this.drawer.progress(progress, true);
 
         if (!paused) { this.backend.play(); }
@@ -477,7 +476,6 @@ var WaveSurfer = {
         my.params.scrollParent = true;
         my.drawBuffer(function () {
             my.drawer.updateProgress();
-            console.log (my.drawer.relativePositionLock)
             my.drawer.lockOnPosition (my.drawer.getCurrentProgress() * my.drawer.getScrollWidth(), 1, my.drawer.relativePositionLock)
             my.fireEvent('zoom', pxPerSec);
         })
@@ -1766,7 +1764,7 @@ WaveSurfer.Drawer = {
             webkitUserSelect: 'none',
             height: this.params.height + 'px'
         });
-
+        
         if (this.params.fillParent || this.params.scrollParent) {
             this.style(this.wrapper, {
                 width: '100%',
@@ -1774,7 +1772,8 @@ WaveSurfer.Drawer = {
                 overflowY: 'hidden'
             });
         }
-
+        if (this.params.styleList.wrapper) this.style(this.wrapper, this.params.styleList.wrapper);
+        if (this.params.classList.wrapper) this.wrapper.classList.add(this.params.classList.wrapper);
         this.setupWrapperEvents();
     },
 
@@ -1784,21 +1783,21 @@ WaveSurfer.Drawer = {
         var clientX = e.targetTouches ? e.targetTouches[0].clientX : e.clientX;
         var bbox = this.wrapper.getBoundingClientRect();
 
-        var visibleWidth = this.width;
-        var containerWidth = this.getWidth();
+        // We must subtract 1 from the denominator:
+        // The expected return range for the "progress" variable is between 0 and 1.
+        // A 100-pixel element can be clicked at position 0 through position 99.
+        // Clicking at the 100th pixel (pixel position 99) should yield 1. If we don't subtract 1, it will yield 99/100 or .99.
 
+        var visibleWidth = this.width - 1;
+        var scrollContainerWidth = this.getWidth() - 1;
         // If the entire container is not filled and further if the nominal width is less than the parent width...
-        if (!this.params.fillParent && visibleWidth < containerWidth) {
-            var numerator = (clientX - bbox.left) * this.params.pixelRatiol // Apparently we need to scale this here...
-            var denominator = visibleWidth - 1;
+        if (!this.params.fillParent && visibleWidth < scrollContainerWidth) {
+            var numerator = clientX - bbox.left;
+            var denominator = visibleWidth / this.params.pixelRatio;
         } else {
             var numerator = clientX - bbox.left + this.wrapper.scrollLeft;
-            var denominator = this.getScrollWidth() - 1;
+            var denominator = this.getScrollWidth();
         }
-
-        // The clicked pixel is never equal the width. It's always 1 pixel less.
-        // A 100-pixel element can be clicked at position 0 through position 99. And the range must include 0 as well as 1.
-        // Thus, clicking at the 100th pixel (99) means progress is 1, not 99/100 or .99.
         var progress = (numerator > denominator) ? 1 : (numerator / denominator || 0);
         return progress;
     },
@@ -1876,11 +1875,11 @@ WaveSurfer.Drawer = {
         this.recenterOnPosition(progress * this.getScrollWidth(), 1);
     },
 
-    recenterOnPosition: function (position, scrollSpeed) { this.lockOnPosition(position, scrollSpeed, .5); },
+    recenterOnPosition: function (position, scrollSpeed) {this.lockOnPosition(position, scrollSpeed, .5); },
     
     lockOnPosition: function (position, scrollSpeed, relativePosition) {
         var relativePosition = relativePosition === undefined ? .5 : relativePosition;
-        var newScroll = position - relativePosition * this.getWidth();
+        var newScroll = position - relativePosition * this.getWidth() / this.params.pixelRatio;
         this.wrapper.scrollLeft = (this.wrapper.scrollLeft * (1 - scrollSpeed) + newScroll * scrollSpeed) || 0;
         this.lastScrollWasProgrammatic = true;
     },
@@ -1939,8 +1938,6 @@ WaveSurfer.Drawer = {
         if (pos < this.lastPos || pos - this.lastPos >= minPxDelta) {
             this.lastPos = pos;
             if (this.params.scrollParent && (this.params.autoCenter || this.params.autoVisualRange)) {
-            console.log (this.params.autoVisualRange, fromSeekTo)
-                console.log (this.relativePositionLock)
                 pos = ~~(this.getScrollWidth() * progress);
                 this.lockOnPosition(pos, 1, this.relativePositionLock);
             }
