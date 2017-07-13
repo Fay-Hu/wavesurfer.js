@@ -3,6 +3,8 @@
 /* Region manager */
 WaveSurfer.Regions = {
     init: function (wavesurfer) {
+        var my = this;
+        
         this.wavesurfer = wavesurfer;
         this.wrapper = this.wavesurfer.drawer.wrapper;
 
@@ -10,19 +12,118 @@ WaveSurfer.Regions = {
         this.list = {};
         this.regionAction = undefined;
         this.activeRegion = undefined;
+        this.mousedOverRegion = undefined;
+        
+        /* Drag or resize on mousemove. */
+        var duration = my.wavesurfer.getDuration();
+        var mouseDownStart, dragStart, drag, resize;
+        var touchId;
+        var initialTime, initialStart, initialEnd;
+
+        this.defaultDrawerCursor = window.getComputedStyle(this.wrapper).cursor;
+
+        my.onDown = function (evt) {
+            var currentRegion = evt.currentTarget.wavesurferRegion;
+            if (evt.touches && evt.touches.length > 1) { return; }
+            mouseDownStart = true;
+            my.activeRegion = currentRegion;
+            touchId = evt.targetTouches ? evt.targetTouches[0].identifier : null;
+            evt.stopPropagation();
+            initialTime = my.wavesurfer.drawer.handleEvent(evt, true) * duration;
+            initialStart = currentRegion.start, initialEnd = currentRegion.end;
+            if (my.regionAction !== undefined) { return; }
+            if (evt.target.tagName.toLowerCase() == 'handle') {
+                if (evt.target.classList.contains('wavesurfer-handle-start') && currentRegion.resizeStart) {
+                    resize = 'start';
+                    my.regionAction = 'resize_from_start';
+                } else if (currentRegion.resizeEnd) {
+                    resize = 'end';
+                    my.regionAction = 'resize_from_end';
+                }
+            } else if (my.drag) {
+                my.regionAction = 'dragstart';
+                dragStart = true;
+            }
+            my.updateCursor();
+        };
+        my.onUp = function (evt) {
+            // Prevent the seek from changing positions if there was a drag.
+            if (typeof mouseDownStart == 'undefined') {
+                my.wavesurfer.params.interact = false;
+                setTimeout (function () {my.wavesurfer.params.interact = true;}, 0);
+            }
+            if (typeof dragStart == 'undefined' && typeof drag == 'undefined' && typeof resize == 'undefined') { return; }
+            dragStart = undefined;
+            mouseDownStart = undefined;
+            my.regionAction = undefined;
+            my.updateCursor();
+            if (evt.touches && evt.touches.length > 1) { return; }
+            if (drag || resize) {
+                if (typeof resize != 'undefined') {
+                    my.activeRegion.fireEventPropagate('resize-end');
+                    my.activeRegion.fireEventPropagate('resize_from_' + resize + '-end');
+                }
+                if (typeof drag != 'undefined') { my.activeRegion.fireEventPropagate('drag-end'); }
+                my.activeRegion.fireEventPropagate('update-end', evt);
+                drag = undefined;
+                resize = undefined;
+            }
+            my.activeRegion = undefined;
+        };
+        my.onMove = function (evt) {
+            if (evt.touches && evt.touches.length > 1) { return; }
+            if (evt.targetTouches && evt.targetTouches[0].identifier != touchId) { return; }
+            if (dragStart) {
+               dragStart = undefined;
+               drag = true;
+               if (my.activeRegion.drag) { my.regionAction = 'drag'; }
+            }
+            if (mouseDownStart) mouseDownStart = undefined;
+            if (drag || resize) {
+                var time = my.wavesurfer.drawer.handleEvent(evt) * duration;
+                // Drag
+                if (my.activeRegion.drag && drag) { my.activeRegion.onDrag(initialStart, initialEnd, time - initialTime); }
+                // Resize
+                if (my.activeRegion.resize && resize) { my.activeRegion.onResize(resize, initialStart, initialEnd, time); }
+            }
+        };
+
+        my.onMouseOver = function (evt) {
+            var currentRegion = evt.currentTarget.wavesurferRegion;
+            if (!currentRegion.drag) { return; }
+            my.mousedOverRegion = currentRegion;
+            my.updateCursor();
+        };
+        my.onMouseOut = function (evt) {
+            var currentRegion = evt.currentTarget.wavesurferRegion;
+            if (!currentRegion.drag) { return; }
+            my.mousedOverRegion = undefined;
+            my.updateCursor();
+        };
+        document.body.addEventListener('mouseup', my.onUp);
+        document.body.addEventListener('touchend', my.onUp);
+        my.wrapper.addEventListener('mousemove', my.onMove);
+        my.wrapper.addEventListener('touchmove', my.onMove, {passive: false});
+        
+        my.on('remove', function () {
+            my.onUp();
+            document.body.removeEventListener('mouseup', my.onUp);
+            document.body.removeEventListener('touchend', my.onUp);
+            my.wrapper.removeEventListener('mousemove', my.onMove);
+            my.wrapper.removeEventListener('touchmove', my.onMove);
+        });
+        my.wavesurfer.on('destroy', function () {
+            document.body.removeEventListener('mouseup', my.onUp);
+            document.body.removeEventListener('touchend', my.onUp);
+        });
     },
 
     /* Add a region. */
     add: function (params) {
         var region = Object.create(WaveSurfer.Region);
         region.init(params, this.wavesurfer, this);
-
         this.list[region.id] = region;
-
-        region.on('remove', (function () {
-            delete this.list[region.id];
-        }).bind(this));
-
+        region.on('remove', (function () { delete this.list[region.id]; }).bind(this));
         return region;
     },
 
@@ -110,11 +211,12 @@ WaveSurfer.Regions = {
 
     updateCursor: function () {
         var my = this;
+        
         WaveSurfer.Drawer.style(my.wrapper, {
             cursor: (my.regionAction == 'resize_from_start' || my.regionAction == 'resize_from_end') ?
                         'col-resize' :
-                        ((my.regionAction == 'dragstart' || my.regionAction == 'drag' || (my.activeRegion && my.activeRegion.drag)) ?
-                            'move' : 'default'
+                        ((my.regionAction == 'dragstart' || my.regionAction == 'drag' || (my.mousedOverRegion && my.mousedOverRegion.drag)) ?
+                            'move' : this.defaultDrawerCursor
                         )
         });
     },
@@ -280,6 +382,7 @@ WaveSurfer.Region = {
         }
 
         this.element = this.wrapper.appendChild(regionEl);
+        this.element.wavesurferRegion = this
         this.updateRender();
         this.bindEvents(regionEl);
     },
@@ -391,119 +494,11 @@ WaveSurfer.Region = {
             e.preventDefault();
             my.fireEventPropagate('dblclick', e);
         });
-
-        /* Drag or resize on mousemove. */
-        if (this.drag || this.resize) {void function () {
-            var duration = my.wavesurfer.getDuration();
-            var dragStart, drag, resize;
-            var touchId;
-            var initialTime, initialStart, initialEnd;
-
-            var onDown = function (e) {
-                if (e.touches && e.touches.length > 1) { return; }
-                touchId = e.targetTouches ? e.targetTouches[0].identifier : null;
-
-                e.stopPropagation();
-                initialTime = my.wavesurfer.drawer.handleEvent(e, true) * duration;
-                initialStart = my.start, initialEnd = my.end;
-
-                if (my.regionManager.regionAction !== undefined) { return; }
-
-                if (e.target.tagName.toLowerCase() == 'handle') {
-                    if (e.target.classList.contains('wavesurfer-handle-start') && my.resizeStart) {
-                        resize = 'start';
-                        my.regionManager.regionAction = 'resize_from_start';
-                    } else if (my.resizeEnd) {
-                        resize = 'end';
-                        my.regionManager.regionAction = 'resize_from_end';
-                    }
-                } else if (my.drag) {
-                    my.regionManager.regionAction = 'dragstart';
-                    dragStart = true;
-                }
-                my.regionManager.updateCursor();
-            };
-            var onUp = function (e) {
-                dragStart = undefined;
-                if (typeof dragStart == 'undefined' && typeof drag == 'undefined' && typeof resize == 'undefined') { return; }
-                my.regionManager.regionAction = undefined;
-                my.regionManager.updateCursor();
-                if (e.touches && e.touches.length > 1) { return; }
-
-                // Prevent the seek from changing positions.
-                my.wavesurfer.params.interact = false;
-                setTimeout (function () {my.wavesurfer.params.interact = true;}, 0);
-
-                if (drag || resize) {
-                    if (typeof resize != 'undefined') {
-                        my.fireEventPropagate('resize-end');
-                        my.fireEventPropagate('resize_from_' + resize + '-end');
-                    }
-                    if (typeof drag != 'undefined') { my.fireEventPropagate('drag-end'); }
-                    my.fireEventPropagate('update-end', e);
-                    drag = undefined;
-                    resize = undefined;
-                }
-            };
-            var onMove = function (e) {
-                if (e.touches && e.touches.length > 1) { return; }
-                if (e.targetTouches && e.targetTouches[0].identifier != touchId) { return; }
-
-                if (dragStart) {
-                   dragStart = undefined;
-                   drag = true;
-                   if (my.drag) { my.regionManager.regionAction = 'drag'; }
-                }
-
-                if (drag || resize) {
-                    var time = my.wavesurfer.drawer.handleEvent(e) * duration;
-                    // Drag
-                    if (my.drag && drag) {
-                        my.onDrag(initialStart, initialEnd, time - initialTime);
-                    }
-
-                    // Resize
-                    if (my.resize && resize) {
-                        my.onResize(resize, initialStart, initialEnd, time);
-                    }
-                }
-            };
-            var onMouseOver = function (e) {
-                if (!my.drag) { return; }
-                my.regionManager.activeRegion = my;
-                my.regionManager.updateCursor();
-            };
-            var onMouseOut = function (e) {
-                if (!my.drag) { return; }
-                my.regionManager.activeRegion = undefined;
-                my.regionManager.updateCursor();
-            };
-
-            my.element.addEventListener('mouseover', onMouseOver);
-            my.element.addEventListener('mouseout', onMouseOut);
-
-            my.element.addEventListener('mousedown', onDown);
-            my.element.addEventListener('touchstart', onDown, {passive: false});
-
-            my.wrapper.addEventListener('mousemove', onMove);
-            my.wrapper.addEventListener('touchmove', onMove, {passive: false});
-
-            document.body.addEventListener('mouseup', onUp);
-            document.body.addEventListener('touchend', onUp);
-
-            my.on('remove', function () {
-                onUp();
-                document.body.removeEventListener('mouseup', onUp);
-                document.body.removeEventListener('touchend', onUp);
-                my.wrapper.removeEventListener('mousemove', onMove);
-                my.wrapper.removeEventListener('touchmove', onMove);
-            });
-
-            my.wavesurfer.on('destroy', function () {
-                document.body.removeEventListener('mouseup', onUp);
-                document.body.removeEventListener('touchend', onUp);
-            });
-        }();}
+        var element = my.element, regionManager = my.regionManager;
+        element.addEventListener('mouseover', regionManager.onMouseOver);
+        element.addEventListener('mouseout', regionManager.onMouseOut);
+        element.addEventListener('mousedown', regionManager.onDown);
+        element.addEventListener('touchstart', regionManager.onDown, {passive: false});
     },
 
     onDrag: function (initialStart, initialEnd, delta) {
