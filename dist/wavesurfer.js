@@ -1,4 +1,4 @@
-/*! wavesurfer.js 1.4.0A (July 13, 2017)
+/*! wavesurfer.js 1.4.0A (July 16, 2017)
 * https://github.com/katspaugh/wavesurfer.js
 * (modifications) https://github.com/agamemnus/wavesurfer.js
 * @license BSD-3-Clause
@@ -476,7 +476,7 @@ var WaveSurfer = {
         my.params.scrollParent = true;
         my.drawBuffer(function () {
             my.drawer.updateProgress();
-            my.drawer.lockOnPosition (my.drawer.getCurrentProgress() * my.drawer.getScrollWidth(), 1, my.drawer.relativePositionLock)
+            my.drawer.lockOnPosition(my.drawer.getCurrentProgress() * my.drawer.getScrollWidth(), 1, my.drawer.relativePositionLock)
             my.fireEvent('zoom', pxPerSec);
         })
     },
@@ -1935,10 +1935,10 @@ WaveSurfer.Drawer = {
         var minPxDelta = 1 / this.params.pixelRatio;
         var pos = Math.round(progress * this.width) * minPxDelta;
         if (this.params.autoVisualRange && fromSeekTo === true) this.setPositionLockFromCursorAndScrollPosition(pos);
-        if (pos < this.lastPos || pos - this.lastPos >= minPxDelta) {
-            this.lastPos = pos;
+        if (progress != this.lastProgress) {
+            this.lastProgress = progress;
             if (this.params.scrollParent && (this.params.autoCenter || this.params.autoVisualRange)) {
-                pos = ~~(this.getScrollWidth() * progress);
+                pos = Math.round(this.getScrollWidth() * progress);
                 this.lockOnPosition(pos, 1, this.relativePositionLock);
             }
          }
@@ -2346,7 +2346,7 @@ WaveSurfer.util.extend(WaveSurfer.Drawer.MultiCanvas, {
     getCurrentPosition: function () {
         var progress = this.wavesurfer.backend.getPlayedPercents();
         if (progress === 0 && this.wavesurfer.lastClickPosition != 0) progress = this.wavesurfer.lastClickPosition;
-        return this.width / this.wavesurfer.params.pixelRatio * progress;
+        return Math.round(this.width / this.wavesurfer.params.pixelRatio * progress);
     },
 
     getCurrentProgress: function () {
